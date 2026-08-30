@@ -1,5 +1,7 @@
 # ά‑Gram
 
+![Обложка ά‑Gram — независимого клиента Telegram](assets/agram-github-cover-1280x640.png)
+
 ά‑Gram — экспериментальный неофициальный клиент Telegram для Android и Windows. Проект основан на открытых исходниках Telegram Android и Telegram Desktop и распространяется вместе с инструкциями для воспроизводимой сборки.
 
 ## Состав репозитория
