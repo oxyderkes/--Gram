@@ -1,0 +1,38 @@
+# Secrets and local credentials
+**/local.properties
+**/*.keystore
+**/*.jks
+**/*.p12
+**/*.pem
+**/DesktopPrivate/
+.env
+.env.*
+
+# Build output and dependencies
+**/.gradle/
+**/out/
+android/**/build/
+windows/**/out/
+**/.next/
+**/.vinext/
+**/.wrangler/
+**/node_modules/
+**/dist/
+
+# Release binaries belong to GitHub Releases
+*.apk
+*.exe
+*.msi
+*.zip
+*.7z
+*.dmp
+*.pdb
+*.obj
+*.log
+
+# Local IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
