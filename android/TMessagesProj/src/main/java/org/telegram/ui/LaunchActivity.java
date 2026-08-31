@@ -1249,18 +1249,13 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         int padding = dp(24);
         input.setPadding(padding, dp(8), padding, dp(8));
         new AlertDialog.Builder(this)
-                .setTitle(record.decoyCodes.isEmpty() ? record.name : "ά-Gram")
-                .setMessage(record.decoyCodes.isEmpty() ? "Введите PIN изолированного контейнера" : "Введите код доступа")
+                .setTitle(record.name)
+                .setMessage("Введите PIN изолированного контейнера")
                 .setView(input)
                 .setNegativeButton(LocaleController.getString(R.string.Cancel), null)
                 .setPositiveButton(LocaleController.getString(R.string.OK), (dialog, which) -> {
-                    int target = AgramContainerManager.getInstance().resolvePinTarget(account, input.getText().toString());
-                    if (target == AgramContainerManager.PIN_RESULT_REAL) {
+                    if (AgramContainerManager.getInstance().verifyPin(account, input.getText().toString())) {
                         onUnlocked.onUnlocked(account);
-                    } else if (target >= 0 && target < UserConfig.MAX_ACCOUNT_COUNT
-                            && UserConfig.isValidAccount(target)
-                            && UserConfig.getInstance(target).isClientActivated()) {
-                        onUnlocked.onUnlocked(target);
                     } else {
                         Toast.makeText(this, "Неверный PIN", Toast.LENGTH_SHORT).show();
                     }

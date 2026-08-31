@@ -11,15 +11,12 @@ import android.util.Base64;
 import android.util.SparseArray;
 
 import org.json.JSONException;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
-import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.UUID;
@@ -43,13 +40,13 @@ public final class AgramContainerManager {
     public static final int NOTIFICATION_AUTHOR = 1;
     public static final int NOTIFICATION_FULL = 2;
 
-    public static final int PIN_RESULT_INVALID = -2;
-    public static final int PIN_RESULT_REAL = -1;
-
     private static final String REGISTRY = "agram_container_registry";
     private static final String SLOT_PREFIX = "slot_";
     private static final String METADATA_PREFIX = "metadata_";
-    private static final int SCHEMA_VERSION = 1;
+    private static final int SCHEMA_VERSION = 2;
+    private static final String LEGACY_DURESS_PREFS = "agram_duress_registry";
+    private static final String LEGACY_DURESS_SCOPE = "agram_global_duress_v1";
+    private static final String LEGACY_CODES_PURGED = "legacy_false_codes_purged_v2";
     private static final int PIN_ITERATIONS = 160_000;
 
     private static volatile AgramContainerManager instance;
@@ -75,6 +72,7 @@ public final class AgramContainerManager {
 
     private AgramContainerManager() {
         preferences = ApplicationLoader.applicationContext.getSharedPreferences(REGISTRY, Context.MODE_PRIVATE);
+        purgeLegacyFalseCodes();
     }
 
     public ContainerRecord ensureContainer(int account) {
@@ -169,74 +167,6 @@ public final class AgramContainerManager {
         } catch (Exception e) {
             FileLog.e("Unable to verify Agram container PIN", e);
             return false;
-        }
-    }
-
-    /**
-     * Resolves a code without exposing whether it is the real code or a local
-     * legend code. A non-negative result is the account container selected as
-     * the safe legend.
-     */
-    public int resolvePinTarget(int account, String pin) {
-        ContainerRecord record = getContainer(account);
-        if (record == null) {
-            return PIN_RESULT_INVALID;
-        }
-        if (verifyHash(pin, record.pinSalt, record.pinHash)) {
-            return PIN_RESULT_REAL;
-        }
-        for (int i = 0; i < record.decoyCodes.size(); i++) {
-            DecoyCode code = record.decoyCodes.get(i);
-            if (verifyHash(pin, code.pinSalt, code.pinHash)) {
-                return code.targetAccount;
-            }
-        }
-        return PIN_RESULT_INVALID;
-    }
-
-    public void updateDecoyCodes(int account, String[] pins, int[] targetAccounts, boolean clearExisting) {
-        synchronized (sync) {
-            ContainerRecord record = ensureContainer(account);
-            if (!record.hasPin() && pins != null && pins.length > 0) {
-                throw new IllegalArgumentException("A real PIN is required before legend PINs can be configured");
-            }
-            if (clearExisting) {
-                record.decoyCodes.clear();
-            }
-            if (pins != null && targetAccounts != null && pins.length == targetAccounts.length && pins.length > 0) {
-                ArrayList<DecoyCode> replacements = new ArrayList<>();
-                HashSet<Integer> targets = new HashSet<>();
-                HashSet<String> uniquePins = new HashSet<>();
-                for (int i = 0; i < pins.length && i < 3; i++) {
-                    String pin = pins[i];
-                    int target = targetAccounts[i];
-                    if (TextUtils.isEmpty(pin)) {
-                        continue;
-                    }
-                    if (pin.length() < 6 || verifyHash(pin, record.pinSalt, record.pinHash)) {
-                        throw new IllegalArgumentException("Legend PIN must differ from the real PIN and contain at least 6 characters");
-                    }
-                    if (!uniquePins.add(pin)) {
-                        throw new IllegalArgumentException("Legend PINs must be unique");
-                    }
-                    if (target < 0 || target >= UserConfig.MAX_ACCOUNT_COUNT || target == account
-                            || !UserConfig.isValidAccount(target) || !UserConfig.getInstance(target).isClientActivated()) {
-                        throw new IllegalArgumentException("Legend target must be another active account");
-                    }
-                    if (!targets.add(target)) {
-                        throw new IllegalArgumentException("Each legend must use a different account");
-                    }
-                    DecoyCode code = new DecoyCode();
-                    code.targetAccount = target;
-                    setDecoyPin(code, pin);
-                    replacements.add(code);
-                }
-                if (!replacements.isEmpty()) {
-                    record.decoyCodes.clear();
-                    record.decoyCodes.addAll(replacements);
-                }
-            }
-            saveRecord(record);
         }
     }
 
@@ -445,17 +375,9 @@ public final class AgramContainerManager {
         public boolean ghostMinimizeOnline;
         public boolean ghostReadOnInteraction;
         public boolean ghostWarnBeforeInteraction;
-        public final ArrayList<DecoyCode> decoyCodes = new ArrayList<>();
-
         public boolean hasPin() {
             return !TextUtils.isEmpty(pinHash) && !TextUtils.isEmpty(pinSalt);
         }
-    }
-
-    public static final class DecoyCode {
-        public int targetAccount;
-        public String pinSalt;
-        public String pinHash;
     }
 
     public void saveProxySettings(int account, boolean enabled, String address, int port,
@@ -582,9 +504,16 @@ public final class AgramContainerManager {
             }
             byte[] encrypted = Base64.decode(encoded, Base64.NO_WRAP);
             byte[] clear = AgramSecureStore.decrypt(id, encrypted, AgramSecureStore.aad(id, "metadata"));
-            ContainerRecord record = fromJson(new JSONObject(new String(clear, StandardCharsets.UTF_8)));
+            JSONObject json = new JSONObject(new String(clear, StandardCharsets.UTF_8));
+            int storedSchema = json.optInt("schema", 0);
+            ContainerRecord record = fromJson(json);
             if (record.account != account || !id.equals(record.id)) {
                 throw new GeneralSecurityException("Container registry mismatch");
+            }
+            if (storedSchema < SCHEMA_VERSION || json.has("decoy_codes")) {
+                // Version 2 removes legacy false-code hashes from encrypted
+                // metadata instead of only hiding their settings UI.
+                saveRecord(record);
             }
             return record;
         } catch (Exception e) {
@@ -630,21 +559,12 @@ public final class AgramContainerManager {
         json.put("ghost_online", record.ghostMinimizeOnline);
         json.put("ghost_read_on_interaction", record.ghostReadOnInteraction);
         json.put("ghost_warn_interaction", record.ghostWarnBeforeInteraction);
-        JSONArray decoys = new JSONArray();
-        for (int i = 0; i < record.decoyCodes.size(); i++) {
-            DecoyCode code = record.decoyCodes.get(i);
-            JSONObject value = new JSONObject();
-            value.put("target_account", code.targetAccount);
-            value.put("pin_salt", code.pinSalt);
-            value.put("pin_hash", code.pinHash);
-            decoys.put(value);
-        }
-        json.put("decoy_codes", decoys);
         return json;
     }
 
     private ContainerRecord fromJson(JSONObject json) throws JSONException {
-        if (json.optInt("schema", 0) != SCHEMA_VERSION) {
+        int schema = json.optInt("schema", 0);
+        if (schema < 1 || schema > SCHEMA_VERSION) {
             throw new JSONException("Unsupported Agram container schema");
         }
         ContainerRecord record = new ContainerRecord();
@@ -682,22 +602,6 @@ public final class AgramContainerManager {
         record.ghostMinimizeOnline = json.optBoolean("ghost_online", true);
         record.ghostReadOnInteraction = json.optBoolean("ghost_read_on_interaction", true);
         record.ghostWarnBeforeInteraction = json.optBoolean("ghost_warn_interaction", true);
-        JSONArray decoys = json.optJSONArray("decoy_codes");
-        if (decoys != null) {
-            for (int i = 0; i < decoys.length() && i < 3; i++) {
-                JSONObject value = decoys.optJSONObject(i);
-                if (value == null) {
-                    continue;
-                }
-                DecoyCode code = new DecoyCode();
-                code.targetAccount = value.optInt("target_account", -1);
-                code.pinSalt = nullable(value, "pin_salt");
-                code.pinHash = nullable(value, "pin_hash");
-                if (code.targetAccount >= 0 && !TextUtils.isEmpty(code.pinSalt) && !TextUtils.isEmpty(code.pinHash)) {
-                    record.decoyCodes.add(code);
-                }
-            }
-        }
         return record;
     }
 
@@ -715,34 +619,25 @@ public final class AgramContainerManager {
         }
     }
 
-    private void setDecoyPin(DecoyCode code, String pin) {
-        try {
-            byte[] salt = new byte[16];
-            secureRandom.nextBytes(salt);
-            code.pinSalt = Base64.encodeToString(salt, Base64.NO_WRAP);
-            code.pinHash = Base64.encodeToString(derivePin(pin, salt), Base64.NO_WRAP);
-        } catch (Exception e) {
-            throw new IllegalStateException("Unable to protect legend PIN", e);
+    private void purgeLegacyFalseCodes() {
+        if (preferences.getBoolean(LEGACY_CODES_PURGED, false)) {
+            return;
         }
-    }
-
-    private static boolean verifyHash(String pin, String encodedSalt, String encodedHash) {
-        if (TextUtils.isEmpty(pin) || TextUtils.isEmpty(encodedSalt) || TextUtils.isEmpty(encodedHash)) {
-            return false;
-        }
-        try {
-            byte[] salt = Base64.decode(encodedSalt, Base64.NO_WRAP);
-            byte[] expected = Base64.decode(encodedHash, Base64.NO_WRAP);
-            byte[] actual = derivePin(pin, salt);
-            int diff = expected.length ^ actual.length;
-            for (int i = 0; i < Math.min(expected.length, actual.length); i++) {
-                diff |= expected[i] ^ actual[i];
+        ApplicationLoader.applicationContext
+                .getSharedPreferences(LEGACY_DURESS_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .clear()
+                .commit();
+        AgramSecureStore.deleteKey(LEGACY_DURESS_SCOPE);
+        // Touch every registered container once so schema-v1 metadata is
+        // rewritten immediately without the legacy code hashes.
+        for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
+            String id = preferences.getString(SLOT_PREFIX + account, null);
+            if (!TextUtils.isEmpty(id)) {
+                readRecord(account, id);
             }
-            return diff == 0;
-        } catch (Exception e) {
-            FileLog.e("Unable to verify protected PIN", e);
-            return false;
         }
+        preferences.edit().putBoolean(LEGACY_CODES_PURGED, true).commit();
     }
 
     private static byte[] derivePin(String pin, byte[] salt) throws Exception {

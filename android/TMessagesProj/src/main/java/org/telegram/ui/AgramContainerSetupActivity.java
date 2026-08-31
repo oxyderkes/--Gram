@@ -32,6 +32,7 @@ import org.telegram.messenger.R;
 import org.telegram.messenger.UserConfig;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.ActionBar;
+import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.LayoutHelper;
 
@@ -63,9 +64,6 @@ public class AgramContainerSetupActivity extends BaseFragment {
     private Switch ghostOnlineSwitch;
     private Switch ghostReadOnInteractionSwitch;
     private Switch ghostWarnSwitch;
-    private final EditText[] decoyPinFields = new EditText[3];
-    private final EditText[] decoyTargetFields = new EditText[3];
-    private Switch clearDecoyCodesSwitch;
     private RadioButton hiddenNotifications;
     private RadioButton authorNotifications;
     private RadioButton fullNotifications;
@@ -136,6 +134,20 @@ public class AgramContainerSetupActivity extends BaseFragment {
         LinearLayout identityCard = card(context);
         content.addView(identityCard, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
         identityCard.addView(sectionLabel(context, "КОНТЕЙНЕР"));
+        if (!activeContainer) {
+            TextView containerPicker = text(
+                    context,
+                    containerPickerLabel(account, record),
+                    15,
+                    Theme.key_windowBackgroundWhiteBlueText,
+                    true
+            );
+            containerPicker.setGravity(Gravity.CENTER_VERTICAL);
+            containerPicker.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(8), AndroidUtilities.dp(14), AndroidUtilities.dp(8));
+            containerPicker.setBackground(rounded(Theme.getColor(Theme.key_windowBackgroundGray), 10));
+            containerPicker.setOnClickListener(v -> showContainerPicker());
+            identityCard.addView(containerPicker, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 52, 0, 0, 0, 10));
+        }
         nameField = input(context, "Название контейнера");
         nameField.setText(record.name);
         nameField.setSelection(nameField.length());
@@ -283,34 +295,6 @@ public class AgramContainerSetupActivity extends BaseFragment {
         note.setLineSpacing(AndroidUtilities.dp(2), 1f);
         securityCard.addView(note, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 8, 0, 0));
 
-        if (activeContainer) {
-            LinearLayout legendCard = card(context);
-            content.addView(legendCard, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
-            legendCard.addView(sectionLabel(context, "ЛОЖНЫЕ КОДЫ · ЛЕГЕНДА"));
-            for (int i = 0; i < decoyPinFields.length; i++) {
-                decoyPinFields[i] = input(context, "Ложный код " + (i + 1) + " — минимум 6 символов");
-                decoyPinFields[i].setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-                decoyTargetFields[i] = input(context, "Номер аккаунта-легенды (1–" + UserConfig.MAX_ACCOUNT_COUNT + ")");
-                decoyTargetFields[i].setInputType(InputType.TYPE_CLASS_NUMBER);
-                if (i < record.decoyCodes.size()) {
-                    decoyTargetFields[i].setText(String.valueOf(record.decoyCodes.get(i).targetAccount + 1));
-                }
-                legendCard.addView(decoyPinFields[i], LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, 0, i == 0 ? 2 : 12, 0, 0));
-                legendCard.addView(decoyTargetFields[i], LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, 0, 6, 0, 0));
-            }
-            clearDecoyCodesSwitch = settingSwitch(context, "Удалить сохранённые ложные коды", false);
-            legendCard.addView(clearDecoyCodesSwitch, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 52, 0, 8, 0, 0));
-            TextView legendNote = text(
-                    context,
-                    "Ложный код открывает выбранный локальный аккаунт-легенду. Пустые поля сохраняют текущие коды. Автоматическое удаление, выход из сеансов и скрытые SOS-действия не выполняются.",
-                    12,
-                    Theme.key_windowBackgroundWhiteGrayText,
-                    false
-            );
-            legendNote.setLineSpacing(AndroidUtilities.dp(2), 1f);
-            legendCard.addView(legendNote, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 8, 0, 0));
-        }
-
         Space space = new Space(context);
         content.addView(space, LayoutHelper.createLinear(1, 8));
 
@@ -370,9 +354,6 @@ public class AgramContainerSetupActivity extends BaseFragment {
                     biometricSwitch.isChecked(),
                     selectedNotificationPrivacy()
             );
-            if (!saveDecoyCodes()) {
-                return;
-            }
             saveGhostMode();
             Toast.makeText(getParentActivity(), "Настройки контейнера сохранены", Toast.LENGTH_SHORT).show();
             finishFragment();
@@ -404,7 +385,68 @@ public class AgramContainerSetupActivity extends BaseFragment {
             );
         }
         saveGhostMode();
-        presentFragment(new LoginActivity(account), true);
+        boolean hasActiveAccount = false;
+        for (int slot = 0; slot < UserConfig.MAX_ACCOUNT_COUNT; slot++) {
+            if (UserConfig.getInstance(slot).isClientActivated()) {
+                hasActiveAccount = true;
+                break;
+            }
+        }
+        if (hasActiveAccount) {
+            presentFragment(new LoginActivity(account), true);
+        } else {
+            // The normal first-login branch must own the selected slot. Treating
+            // it as "add account" leaves the app on Intro after authorization.
+            UserConfig.selectedAccount = account;
+            UserConfig.getInstance(0).saveConfig(false);
+            presentFragment(new LoginActivity(), true);
+        }
+    }
+
+    private void showContainerPicker() {
+        java.util.ArrayList<Integer> slots = new java.util.ArrayList<>();
+        java.util.ArrayList<CharSequence> labels = new java.util.ArrayList<>();
+        int firstFreeSlot = -1;
+        for (int slot = 0; slot < UserConfig.MAX_ACCOUNT_COUNT; slot++) {
+            AgramContainerManager.ContainerRecord candidate = AgramContainerManager.getInstance().getContainer(slot);
+            if (candidate == null) {
+                if (firstFreeSlot == -1) {
+                    firstFreeSlot = slot;
+                }
+                continue;
+            }
+            slots.add(slot);
+            String state;
+            if (UserConfig.getInstance(slot).isClientActivated()) {
+                state = "активен";
+            } else if (candidate.profileLocked) {
+                state = "сессия завершена · доступен повторный вход";
+            } else {
+                state = "подготовлен к входу";
+            }
+            labels.add((slot == account ? "✓ " : "") + (slot + 1) + ". " + candidate.name + "\n" + state);
+        }
+        if (firstFreeSlot != -1) {
+            slots.add(firstFreeSlot);
+            labels.add("＋ Новый контейнер " + (firstFreeSlot + 1));
+        }
+        new AlertDialog.Builder(getParentActivity())
+                .setTitle("Выберите контейнер")
+                .setItems(labels.toArray(new CharSequence[0]), (dialog, which) -> {
+                    int selectedSlot = slots.get(which);
+                    if (selectedSlot != account) {
+                        presentFragment(new AgramContainerSetupActivity(selectedSlot), true);
+                    }
+                })
+                .setNegativeButton(LocaleController.getString(R.string.Cancel), null)
+                .show();
+    }
+
+    private static String containerPickerLabel(int account, AgramContainerManager.ContainerRecord record) {
+        String state = record.profileLocked
+                ? "Сессия завершена — нажмите, чтобы сменить контейнер"
+                : "Нажмите, чтобы выбрать другой или создать новый";
+        return "Контейнер " + (account + 1) + " · " + record.name + "\n" + state;
     }
 
     private void updatePreview() {
@@ -533,55 +575,6 @@ public class AgramContainerSetupActivity extends BaseFragment {
                 ghostReadOnInteractionSwitch.isChecked(),
                 ghostWarnSwitch.isChecked()
         );
-    }
-
-    private boolean saveDecoyCodes() {
-        if (clearDecoyCodesSwitch == null) {
-            return true;
-        }
-        int count = 0;
-        for (EditText field : decoyPinFields) {
-            if (field != null && !TextUtils.isEmpty(field.getText().toString())) {
-                count++;
-            }
-        }
-        if (count == 0 && !clearDecoyCodesSwitch.isChecked()) {
-            return true;
-        }
-        String[] pins = new String[count];
-        int[] targets = new int[count];
-        int index = 0;
-        for (int i = 0; i < decoyPinFields.length; i++) {
-            String pin = decoyPinFields[i].getText().toString();
-            if (TextUtils.isEmpty(pin)) {
-                continue;
-            }
-            String targetText = decoyTargetFields[i].getText().toString().trim();
-            if (pin.length() < 6 || TextUtils.isEmpty(targetText)) {
-                Toast.makeText(getParentActivity(), "Для каждого ложного кода укажите минимум 6 символов и аккаунт-легенду", Toast.LENGTH_LONG).show();
-                return false;
-            }
-            try {
-                pins[index] = pin;
-                targets[index] = Integer.parseInt(targetText) - 1;
-            } catch (NumberFormatException e) {
-                Toast.makeText(getParentActivity(), "Номер аккаунта-легенды указан неверно", Toast.LENGTH_LONG).show();
-                return false;
-            }
-            index++;
-        }
-        try {
-            AgramContainerManager.getInstance().updateDecoyCodes(
-                    account,
-                    pins,
-                    targets,
-                    clearDecoyCodesSwitch.isChecked()
-            );
-            return true;
-        } catch (IllegalArgumentException e) {
-            Toast.makeText(getParentActivity(), "Ложный код должен отличаться от настоящего, а легендой должен быть другой активный аккаунт", Toast.LENGTH_LONG).show();
-            return false;
-        }
     }
 
     private void setGhostControlsEnabled(boolean enabled) {
