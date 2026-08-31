@@ -1,6 +1,6 @@
 # ά‑Gram source overlay
 
-This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.12` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
+This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.13` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
 
 ## Base source
 
@@ -41,19 +41,20 @@ The resulting APK is under `TMessagesProj_AppStandalone/build/outputs/apk/afat/s
 ## Implementation summary
 
 - One named local container per Telegram engine account. Existing installations keep their slot and package identity so sessions can migrate in place; no account shares another account's auth state, database, media namespace, account settings or container key.
-- Encrypted container metadata with a random container ID and a distinct AES-256-GCM key generated in Android Keystore. Local cards for revoked accounts are encrypted with the same container boundary.
+- Encrypted container metadata with a random container ID and a distinct AES-256-GCM key generated in Android Keystore.
 - Offline container creation before Telegram authorization, including an exact preview of the session profile. Choose a minimal profile, truthful auto-detection, or a manually entered fixed device/system/client label. Manual fields are encrypted with the container, validated to 64 printable characters and locked after successful login; automatic random rotation is intentionally not implemented.
 - Optional per-container PIN and biometric gate on account switching. False/legend codes are not included; the v2 metadata migration deletes hashes created by the earlier experimental implementation.
-- Before authorization, the setup screen lists retained local containers, clearly marks ended sessions, and offers a new free container. A login started after every account has been logged out now follows the normal first-login lifecycle instead of the add-account branch.
+- Before authorization, the setup screen offers the free account slot and its container profile. A login started after every account has been logged out follows the normal first-login lifecycle instead of the add-account branch.
 - A profile saved after the network singleton has already been created is now re-applied through JNI before authorization. Native datacenter init versions are reset so the next request carries the selected custom `device_model`, `system_version` and `app_version` in a fresh `initConnection`.
 - Per-container Ghost Mode has a master switch directly in the dialogs header, uses a highlighted active state, and applies only to the current container. A long press opens the detailed controls for read-receipt, story-view, typing/recording and online-presence suppression; replies/reactions can require confirmation because server-side interactions may still reveal activity.
 - Automatic chat viewing and explicit read actions use separate paths. While read suppression is active, opening or scrolling through a regular chat does not mutate its local unread state, remove its notification, or send a receipt. The chat-list action and notification action “Mark as read” explicitly clear both local state and the server receipt; optional read-on-interaction does the same after a reply or reaction.
+- Story viewing follows the same local-preservation rule: in Ghost Mode an opened story keeps its unread ring and notification. Opening a story and sending any story reaction use explicit confirmation dialogs.
 - Per-container proxy source of truth and native proxy application; Telegram's legacy proxy screen receives only the selected container's projection.
 - Per-container notification privacy: hide identity, show author only, or use full Telegram previews. The secure default is hidden.
 - 32 stable Java/native engine slots and removal of the Premium account-count gate. Containers provide isolation and lifecycle management over those bounded engine instances; they do not turn the native engine into an unbounded process pool.
 - Staggered lightweight connections for background accounts and lazy initialization of heavy Java controllers on selection.
 - Re-entrancy protection during account switching and sparse-slot-safe notification media handling.
-- Frozen accounts are labelled in selectors. Every active account continuously refreshes a small local profile snapshot; if the account is blocked or its session is revoked, its name, phone, username and already cached avatar remain visible under an explicit local-profile status instead of disappearing.
+- Account selectors contain active sessions only. Ended, blocked and revoked sessions are removed during logout or migration, and their account slot becomes immediately reusable instead of leaving a non-actionable local card.
 - Separate package, account types, MIME types, shortcuts, broadcast actions, app name and launcher icon.
 - Standalone direct-push foreground service for use without Google Play Services.
 - arm64-only Pixel/GrapheneOS flavor and project-specific signing configuration.

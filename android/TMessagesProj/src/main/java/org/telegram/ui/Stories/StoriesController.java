@@ -1285,6 +1285,12 @@ public class StoriesController {
         if (storyItem == null || userStories == null) {
             return false;
         }
+        // Ghost Mode keeps the story unread on this device as well as on the
+        // server.  Updating max_read_id here used to clear the notification and
+        // the unread ring even though the readStories request was suppressed.
+        if (AgramContainerManager.getInstance().shouldSuppressStoryViews(currentAccount)) {
+            return false;
+        }
         final long dialogId = DialogObject.getPeerDialogId(userStories.peer);
         if (storyItem.justUploaded) {
             storyItem.justUploaded = false;
@@ -1301,9 +1307,7 @@ public class StoriesController {
             TL_stories.TL_stories_readStories req = new TL_stories.TL_stories_readStories();
             req.peer = MessagesController.getInstance(currentAccount).getInputPeer(dialogId);
             req.max_id = storyItem.id;
-            if (!AgramContainerManager.getInstance().shouldSuppressStoryViews(currentAccount)) {
-                ConnectionsManager.getInstance(currentAccount).sendRequest(req, null);
-            }
+            ConnectionsManager.getInstance(currentAccount).sendRequest(req, null);
             NotificationCenter.getInstance(currentAccount).postNotificationName(NotificationCenter.storiesReadUpdated);
             return true;
         }

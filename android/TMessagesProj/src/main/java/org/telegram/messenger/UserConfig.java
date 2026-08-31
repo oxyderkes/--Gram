@@ -134,26 +134,15 @@ public class UserConfig extends BaseController {
         return count;
     }
 
-    /**
-     * Returns a truly empty slot first. A retained blocked entry is only reused
-     * when all remaining slots are occupied, so an automatic add-account action
-     * does not silently hide an account that needs attention.
-     */
     public static int getAvailableAccountSlot() {
         int empty = -1;
-        int retained = -1;
         for (int a = MAX_ACCOUNT_COUNT - 1; a >= 0; a--) {
             UserConfig config = getInstance(a);
-            if (config.isClientActivated()) {
-                continue;
-            }
-            if (config.hasAccountEntry()) {
-                retained = a;
-            } else {
+            if (!config.isClientActivated()) {
                 empty = a;
             }
         }
-        return empty >= 0 ? empty : retained;
+        return empty;
     }
 
     public UserConfig(int instance) {
@@ -308,39 +297,23 @@ public class UserConfig extends BaseController {
 
     public TLRPC.User getDisplayUser() {
         synchronized (sync) {
-            return currentUser != null ? currentUser : retainedUser;
+            return currentUser;
         }
     }
 
     public boolean hasAccountEntry() {
         synchronized (sync) {
-            return currentUser != null || retainedUser != null;
+            return currentUser != null;
         }
     }
 
     public int getAccountState() {
         synchronized (sync) {
-            if (currentUser == null) {
-                return retainedUser != null ? retainedAccountState : ACCOUNT_STATE_EMPTY;
-            }
+            return currentUser == null ? ACCOUNT_STATE_EMPTY : ACCOUNT_STATE_ACTIVE;
         }
-        SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences(
-                currentAccount == 0 ? "mainconfig" : "mainconfig" + currentAccount,
-                Context.MODE_PRIVATE
-        );
-        long freezeSince = preferences.getLong("freezeSinceDate", 0L);
-        long freezeUntil = preferences.getLong("freezeUntilDate", 0L);
-        long now = System.currentTimeMillis() / 1000L;
-        return freezeSince != 0L && freezeUntil > now ? ACCOUNT_STATE_FROZEN : ACCOUNT_STATE_ACTIVE;
     }
 
     public String getAccountStatusText() {
-        int state = getAccountState();
-        if (state == ACCOUNT_STATE_FROZEN) {
-            return LocaleController.getString(R.string.AGramAccountFrozen);
-        } else if (state == ACCOUNT_STATE_BLOCKED) {
-            return LocaleController.getString(R.string.AGramAccountBlocked);
-        }
         return "";
     }
 
@@ -352,23 +325,14 @@ public class UserConfig extends BaseController {
             }
             currentUser = user;
             clientUserId = user.id;
-            saveLocalAccountSnapshotLocked(user, ACCOUNT_STATE_ACTIVE, false);
+            clearRetainedAccountStateLocked();
             checkPremiumSelf(oldUser, user);
         }
     }
 
     public void markAccountAccessBlocked() {
         synchronized (sync) {
-            TLRPC.User user = currentUser != null ? currentUser : retainedUser;
-            if (user == null) {
-                loadRetainedAccountStateLocked();
-                user = retainedUser;
-            }
-            if (user == null) {
-                return;
-            }
-            saveLocalAccountSnapshotLocked(user, ACCOUNT_STATE_BLOCKED, true);
-            saveLocalAccountAvatarLocked(user);
+            clearRetainedAccountStateLocked();
         }
     }
 
@@ -631,10 +595,10 @@ public class UserConfig extends BaseController {
             if (currentUser != null) {
                 checkPremiumSelf(null, currentUser);
                 clientUserId = currentUser.id;
-                saveLocalAccountSnapshotLocked(currentUser, ACCOUNT_STATE_ACTIVE, false);
-            } else {
-                loadRetainedAccountState();
             }
+            // Migrate away from the old retained-account-card feature. A
+            // revoked session is now removed and its slot becomes reusable.
+            clearRetainedAccountStateLocked();
             configLoaded = true;
         }
     }
@@ -723,11 +687,7 @@ public class UserConfig extends BaseController {
     }
 
     public void clearConfig(boolean preserveBlockedAccount) {
-        if (preserveBlockedAccount) {
-            markAccountAccessBlocked();
-        } else {
-            clearRetainedAccountState();
-        }
+        clearRetainedAccountState();
         getPreferences().edit().clear().apply();
 
         sharingMyLocationUntil = 0;
