@@ -120,7 +120,7 @@ public class LogoutActivity extends BaseFragment {
             if (position == addAccountRow) {
                 int availableAccount = UserConfig.getAvailableAccountSlot();
                 if (availableAccount >= 0) {
-                    presentFragment(new LoginActivity(availableAccount));
+                    presentFragment(new AgramContainerSetupActivity(availableAccount));
                 }
             } else if (position == passcodeRow) {
                 presentFragment(PasscodeActivity.determineOpenFragment());

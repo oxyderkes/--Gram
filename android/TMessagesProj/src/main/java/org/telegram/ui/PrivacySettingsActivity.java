@@ -130,6 +130,7 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
     private int passkeysRow;
     private int sessionsDetailRow;
     private int agramSectionRow;
+    private int agramContainerSecurityRow;
     private int agramKeepDeletedRow;
     private int agramKeepDeletedInfoRow;
     private int newChatsHeaderRow;
@@ -337,6 +338,8 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
                 if (view instanceof TextCheckCell) {
                     ((TextCheckCell) view).setChecked(enabled);
                 }
+            } else if (position == agramContainerSecurityRow) {
+                presentFragment(new AgramContainerSetupActivity(currentAccount));
             } else if (position == deleteAccountRow) {
                 if (getParentActivity() == null) {
                     return;
@@ -742,6 +745,7 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
         sessionsDetailRow = rowCount++;
 
         agramSectionRow = rowCount++;
+        agramContainerSecurityRow = rowCount++;
         agramKeepDeletedRow = rowCount++;
         agramKeepDeletedInfoRow = rowCount++;
 
@@ -1051,7 +1055,7 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
                     position == emailLoginRow || position == paymentsClearRow || position == secretMapRow ||
                     position == contactsSyncRow || position == passportRow || position == contactsDeleteRow ||
                     position == contactsSuggestRow || position == autoDeleteMesages || position == botsBiometryRow ||
-                    position == agramKeepDeletedRow;
+                    position == agramKeepDeletedRow || position == agramContainerSecurityRow;
         }
 
         @Override
@@ -1241,6 +1245,8 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
                         secretMapUpdate = false;
                     } else if (position == contactsDeleteRow) {
                         textCell.setText(getString("SyncContactsDelete", R.string.SyncContactsDelete), true);
+                    } else if (position == agramContainerSecurityRow) {
+                        textCell.setText(getString(R.string.AGramContainerSecurity), true);
                     }
                     textCell.setDrawLoading(showLoading, loadingLen, animated);
                     break;
@@ -1411,7 +1417,7 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
         public int getItemViewType(int position) {
             if (position == passportRow || position == lastSeenRow || position == phoneNumberRow ||
                     position == deleteAccountRow || position == webSessionsRow || position == groupsRow || position == paymentsClearRow ||
-                    position == secretMapRow || position == contactsDeleteRow || position == botsBiometryRow) {
+                    position == secretMapRow || position == contactsDeleteRow || position == botsBiometryRow || position == agramContainerSecurityRow) {
                 return 0;
             } else if (position == privacyShadowRow || position == deleteAccountDetailRow || position == groupsDetailRow || position == sessionsDetailRow || position == agramKeepDeletedInfoRow || position == secretDetailRow || position == botsDetailRow || position == contactsDetailRow || position == newChatsSectionRow) {
                 return 1;

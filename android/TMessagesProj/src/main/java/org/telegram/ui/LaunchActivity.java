@@ -48,6 +48,7 @@ import android.text.Spannable;
 import android.text.SpannableStringBuilder;
 import android.text.TextPaint;
 import android.text.TextUtils;
+import android.text.InputType;
 import android.text.style.ClickableSpan;
 import android.util.Base64;
 import android.util.SparseIntArray;
@@ -65,6 +66,7 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
@@ -78,10 +80,13 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.arch.core.util.Function;
+import androidx.biometric.BiometricManager;
+import androidx.biometric.BiometricPrompt;
 import androidx.collection.LongSparseArray;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.pm.ShortcutInfoCompat;
 import androidx.core.content.pm.ShortcutManagerCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.graphics.ColorUtils;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -94,6 +99,7 @@ import com.google.firebase.appindexing.builders.AssistActionBuilder;
 
 import org.telegram.PhoneFormat.PhoneFormat;
 import org.telegram.messenger.AccountInstance;
+import org.telegram.messenger.AgramContainerManager;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.AnimationNotificationsLocker;
 import org.telegram.messenger.ApplicationLoader;
@@ -245,6 +251,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.concurrent.Executor;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -1192,6 +1199,71 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         if (switchingAccount || account == UserConfig.selectedAccount || !UserConfig.isValidAccount(account)) {
             return;
         }
+        unlockContainerThen(account, () -> performSwitchToAccount(account, removeAll, dialogsActivityProvider));
+    }
+
+    private void unlockContainerThen(int account, Runnable onUnlocked) {
+        AgramContainerManager.ContainerRecord record = AgramContainerManager.getInstance().ensureContainer(account);
+        if (!record.hasPin() && !record.biometricEnabled) {
+            onUnlocked.run();
+            return;
+        }
+        if (record.biometricEnabled && BiometricManager.from(this).canAuthenticate(
+                BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS) {
+            Executor executor = ContextCompat.getMainExecutor(this);
+            BiometricPrompt prompt = new BiometricPrompt(this, executor, new BiometricPrompt.AuthenticationCallback() {
+                @Override
+                public void onAuthenticationSucceeded(@NonNull BiometricPrompt.AuthenticationResult result) {
+                    onUnlocked.run();
+                }
+
+                @Override
+                public void onAuthenticationError(int errorCode, @NonNull CharSequence errString) {
+                    if (record.hasPin()) {
+                        showContainerPinDialog(account, record, onUnlocked);
+                    }
+                }
+            });
+            prompt.authenticate(new BiometricPrompt.PromptInfo.Builder()
+                    .setTitle(record.name)
+                    .setSubtitle("Разблокировка изолированного контейнера")
+                    .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                    .setNegativeButtonText(record.hasPin() ? "Использовать PIN" : LocaleController.getString(R.string.Cancel))
+                    .build());
+        } else if (record.hasPin()) {
+            showContainerPinDialog(account, record, onUnlocked);
+        } else {
+            Toast.makeText(this, "Биометрия недоступна. Измените защиту контейнера в настройках.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void showContainerPinDialog(int account, AgramContainerManager.ContainerRecord record, Runnable onUnlocked) {
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        input.setHint("PIN контейнера");
+        int padding = dp(24);
+        input.setPadding(padding, dp(8), padding, dp(8));
+        new AlertDialog.Builder(this)
+                .setTitle(record.name)
+                .setMessage("Введите PIN изолированного контейнера")
+                .setView(input)
+                .setNegativeButton(LocaleController.getString(R.string.Cancel), null)
+                .setPositiveButton(LocaleController.getString(R.string.OK), (dialog, which) -> {
+                    if (AgramContainerManager.getInstance().verifyPin(account, input.getText().toString())) {
+                        onUnlocked.run();
+                    } else {
+                        Toast.makeText(this, "Неверный PIN", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .show();
+        input.requestFocus();
+    }
+
+    private void performSwitchToAccount(int account, boolean removeAll, GenericProvider<Void, MainTabsActivity> dialogsActivityProvider) {
+        if (switchingAccount || account == UserConfig.selectedAccount || !UserConfig.isValidAccount(account)) {
+            return;
+        }
         switchingAccount = true;
         try {
             ApplicationLoader.ensureAccountInitialized(account);
@@ -1199,6 +1271,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             ConnectionsManager.getInstance(currentAccount).setAppPaused(true, false);
             UserConfig.selectedAccount = account;
             UserConfig.getInstance(0).saveConfig(false);
+            AgramContainerManager.getInstance().publishProxyForSelectedContainer(account);
 
         checkCurrentAccount();
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.activeAccountChanged, account);

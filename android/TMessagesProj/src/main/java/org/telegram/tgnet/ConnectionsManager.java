@@ -24,6 +24,7 @@ import com.google.android.play.core.integrity.IntegrityTokenResponse;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.telegram.messenger.AccountInstance;
+import org.telegram.messenger.AgramContainerManager;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.BaseController;
@@ -249,7 +250,22 @@ public class ConnectionsManager extends BaseController {
         String pushString = getRegId();
         String fingerprint = AndroidUtilities.getCertificateSHA256Fingerprint();
 
-        int timezoneOffset = (TimeZone.getDefault().getRawOffset() + TimeZone.getDefault().getDSTSavings()) / 1000;
+        int timezoneOffset = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000;
+        AgramContainerManager.SessionProfile sessionProfile = AgramContainerManager.getInstance().resolveSessionProfile(
+                currentAccount,
+                deviceModel,
+                systemVersion,
+                appVersion,
+                langCode,
+                systemLangCode,
+                timezoneOffset
+        );
+        deviceModel = sessionProfile.deviceModel;
+        systemVersion = sessionProfile.systemVersion;
+        appVersion = sessionProfile.appVersion;
+        langCode = sessionProfile.languageCode;
+        systemLangCode = sessionProfile.systemLanguageCode;
+        timezoneOffset = sessionProfile.timezoneOffset;
         SharedPreferences mainPreferences;
         if (currentAccount == 0) {
             mainPreferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
@@ -627,15 +643,11 @@ public class ConnectionsManager extends BaseController {
     }
 
     public void init(int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection) {
-        SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
-        String proxyAddress = preferences.getString("proxy_ip", "");
-        String proxyUsername = preferences.getString("proxy_user", "");
-        String proxyPassword = preferences.getString("proxy_pass", "");
-        String proxySecret = preferences.getString("proxy_secret", "");
-        int proxyPort = preferences.getInt("proxy_port", 1080);
-
-        if (preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress)) {
-            native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret);
+        AgramContainerManager.ProxyProfile proxy = AgramContainerManager.getInstance().getProxyProfile(currentAccount);
+        if (proxy.enabled && !TextUtils.isEmpty(proxy.address)) {
+            native_setProxySettings(currentAccount, proxy.address, proxy.port, proxy.username, proxy.password, proxy.secret);
+        } else {
+            native_setProxySettings(currentAccount, "", 1080, "", "", "");
         }
         String installer = "";
         try {
@@ -955,16 +967,17 @@ public class ConnectionsManager extends BaseController {
             secret = "";
         }
 
-        for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
-            if (enabled && !TextUtils.isEmpty(address)) {
-                native_setProxySettings(a, address, port, username, password, secret);
-            } else {
-                native_setProxySettings(a, "", 1080, "", "", "");
-            }
-            AccountInstance accountInstance = AccountInstance.getInstance(a);
-            if (accountInstance.getUserConfig().isClientActivated()) {
-                accountInstance.getMessagesController().checkPromoInfo(true);
-            }
+        int account = UserConfig.selectedAccount;
+        AgramContainerManager.getInstance().saveProxySettings(
+                account, enabled, address, port, username, password, secret);
+        if (enabled && !TextUtils.isEmpty(address)) {
+            native_setProxySettings(account, address, port, username, password, secret);
+        } else {
+            native_setProxySettings(account, "", 1080, "", "", "");
+        }
+        AccountInstance accountInstance = AccountInstance.getInstance(account);
+        if (accountInstance.getUserConfig().isClientActivated()) {
+            accountInstance.getMessagesController().checkPromoInfo(true);
         }
     }
 

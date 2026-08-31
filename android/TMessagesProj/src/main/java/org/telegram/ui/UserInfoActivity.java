@@ -459,12 +459,12 @@ public class UserInfoActivity extends UniversalFragment implements NotificationC
         if (item.id == BUTTON_ADD_ACCOUNT) {
             int availableAccount = UserConfig.getAvailableAccountSlot();
             if (availableAccount >= 0) {
-                presentFragment(new LoginActivity(availableAccount));
+                presentFragment(new AgramContainerSetupActivity(availableAccount));
             }
         } else if (item.instanceOf(SettingsActivity.AccountCell.Factory.class)) {
             final int account = item.intValue;
             if (!UserConfig.getInstance(account).isClientActivated()) {
-                presentFragment(new LoginActivity(account));
+                presentFragment(new AgramContainerSetupActivity(account));
                 return;
             }
             if (LaunchActivity.instance != null) {

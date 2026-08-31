@@ -625,7 +625,7 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
             o.add(R.drawable.msg_addbot, getString(R.string.AddAccount), () -> {
                 int availableAccount = UserConfig.getAvailableAccountSlot();
                 if (availableAccount >= 0) {
-                    presentFragment(new LoginActivity(availableAccount));
+                    presentFragment(new AgramContainerSetupActivity(availableAccount));
                 }
             });
         }
@@ -643,7 +643,7 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
                     if (currentAccount == account) return;
                     o.dismiss();
                     if (!UserConfig.getInstance(account).isClientActivated()) {
-                        presentFragment(new LoginActivity(account));
+                        presentFragment(new AgramContainerSetupActivity(account));
                         return;
                     }
                     if (LaunchActivity.instance != null) {

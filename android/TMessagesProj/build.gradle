@@ -126,7 +126,7 @@ android {
 
 
     defaultConfig {
-        minSdkVersion 21
+        minSdkVersion 26
         targetSdkVersion 36
 
         ndk {
@@ -135,8 +135,11 @@ android {
 
         def configuredApiId = getProps("TELEGRAM_API_ID")
         def configuredApiHash = getProps("TELEGRAM_API_HASH")
-        buildConfigField "int", "TELEGRAM_APP_ID", configuredApiId ? configuredApiId : "4"
-        buildConfigField "String", "TELEGRAM_API_HASH", "\"" + (configuredApiHash ? configuredApiHash : "014b35b6184100b085b0d0572f9b5103") + "\""
+        // Production builds must never silently fall back to Telegram's public
+        // sample credentials. A zero/empty pair keeps IDE sync working; the
+        // release task guard below rejects such a build before compilation.
+        buildConfigField "int", "TELEGRAM_APP_ID", configuredApiId ? configuredApiId : "0"
+        buildConfigField "String", "TELEGRAM_API_HASH", "\"" + (configuredApiHash ? configuredApiHash : "") + "\""
 
         vectorDrawables.generatedDensities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi']
 
@@ -145,7 +148,7 @@ android {
         externalNativeBuild {
             cmake {
                 version '3.22.1'
-                arguments '-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-21' //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
+                arguments '-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-26' //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
                 targets 'tmessages.49'
             }
         }
@@ -285,4 +288,21 @@ task checkVisibility {
     }
 }
 
-preBuild.dependsOn checkVisibility
+task checkAgramApiCredentials {
+    doLast {
+        def requested = project.gradle.startParameter.taskNames.collect { it.toLowerCase(Locale.ROOT) }
+        def productionBuild = requested.any {
+            (it.contains("assemble") || it.contains("bundle") || it.contains("standalone") || it.contains("release")) && !it.contains("debug")
+        }
+        if (!productionBuild) {
+            return
+        }
+        def apiId = getProps("TELEGRAM_API_ID")?.toString()?.trim()
+        def apiHash = getProps("TELEGRAM_API_HASH")?.toString()?.trim()
+        if (!(apiId ==~ /[1-9][0-9]*/) || !(apiHash ==~ /[0-9a-fA-F]{32}/)) {
+            throw new GradleException("Agram production builds require private TELEGRAM_API_ID and TELEGRAM_API_HASH values in local.properties or the protected CI environment.")
+        }
+    }
+}
+
+preBuild.dependsOn checkVisibility, checkAgramApiCredentials

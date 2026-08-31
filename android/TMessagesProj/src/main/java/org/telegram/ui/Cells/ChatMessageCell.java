@@ -20143,7 +20143,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             return;
         }
 
-        final int sponosoredAlpha = (int) (255 * (1f - isSponsoredMessageHidden.getFloatValue()));
+        final float deletedMessageAlpha = currentMessageObject.isDeletedOnServer() ? 0.4f : 1f;
+        final int sponosoredAlpha = (int) (255 * deletedMessageAlpha * (1f - isSponsoredMessageHidden.getFloatValue()));
         if (sponosoredAlpha == 0) {
             return;
         }

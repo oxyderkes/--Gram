@@ -14546,7 +14546,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                     new SearchResult(502, getString(R.string.AddAnotherAccount), 0, () -> {
                         int freeAccount = UserConfig.getAvailableAccountSlot();
                         if (freeAccount >= 0) {
-                            f.presentFragment(new LoginActivity(freeAccount));
+                            f.presentFragment(new AgramContainerSetupActivity(freeAccount));
                         }
                     }).withLink("tg://settings/edit/add-account"),
                     // TODO:

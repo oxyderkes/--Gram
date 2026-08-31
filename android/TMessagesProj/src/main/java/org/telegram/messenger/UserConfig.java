@@ -30,6 +30,7 @@ public class UserConfig extends BaseController {
     public static final int ACCOUNT_STATE_FROZEN = 2;
     public static final int ACCOUNT_STATE_BLOCKED = 3;
     private static final String ACCOUNT_STATE_PREFERENCES = "agram_account_states";
+    private static final String ENCRYPTED_ACCOUNT_CARD_PREFIX = "v1:";
     /**
      * Number of local account slots supported by this fork.
      *
@@ -412,7 +413,17 @@ public class UserConfig extends BaseController {
             return;
         }
         try {
-            byte[] bytes = Base64.decode(string, Base64.DEFAULT);
+            boolean encrypted = string.startsWith(ENCRYPTED_ACCOUNT_CARD_PREFIX);
+            String encoded = encrypted ? string.substring(ENCRYPTED_ACCOUNT_CARD_PREFIX.length()) : string;
+            byte[] bytes = Base64.decode(encoded, Base64.DEFAULT);
+            if (encrypted) {
+                AgramContainerManager.ContainerRecord container = AgramContainerManager.getInstance().ensureContainer(currentAccount);
+                bytes = AgramSecureStore.decrypt(
+                        container.id,
+                        bytes,
+                        AgramSecureStore.aad(container.id, "account-card")
+                );
+            }
             SerializedData data = new SerializedData(bytes);
             retainedUser = TLRPC.User.TLdeserialize(data, data.readInt32(false), false);
             retainedAccountState = retainedUser != null ? ACCOUNT_STATE_BLOCKED : ACCOUNT_STATE_EMPTY;
@@ -422,6 +433,9 @@ public class UserConfig extends BaseController {
             }
             if (retainedUser != null && state != ACCOUNT_STATE_BLOCKED) {
                 preferences.edit().putInt("state_" + currentAccount, ACCOUNT_STATE_BLOCKED).commit();
+            }
+            if (retainedUser != null && !encrypted) {
+                saveLocalAccountSnapshotLocked(retainedUser, retainedAccountState, true);
             }
         } catch (Exception e) {
             FileLog.e(e);
@@ -444,9 +458,16 @@ public class UserConfig extends BaseController {
         try {
             data = new SerializedData(user.getObjectSize());
             user.serializeToStream(data);
+            AgramContainerManager.ContainerRecord container = AgramContainerManager.getInstance().ensureContainer(currentAccount);
+            byte[] encrypted = AgramSecureStore.encrypt(
+                    container.id,
+                    data.toByteArray(),
+                    AgramSecureStore.aad(container.id, "account-card")
+            );
             SharedPreferences.Editor editor = getAccountStatePreferences().edit()
                     .putInt("state_" + currentAccount, state)
-                    .putString("user_" + currentAccount, Base64.encodeToString(data.toByteArray(), Base64.NO_WRAP));
+                    .putString("user_" + currentAccount, ENCRYPTED_ACCOUNT_CARD_PREFIX
+                            + Base64.encodeToString(encrypted, Base64.NO_WRAP));
             if (synchronous) {
                 editor.commit();
             } else {

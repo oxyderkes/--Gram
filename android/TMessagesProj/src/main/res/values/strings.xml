@@ -11224,9 +11224,10 @@
     <string name="UnsupportedMessageMessage">Update Telegram to view this message</string>
     <string name="UnsupportedUpdate">Update</string>
     <string name="AGramSettingsSection">ά‑Gram</string>
+    <string name="AGramContainerSecurity">Container security</string>
     <string name="AGramKeepDeletedMessages">Keep deleted messages</string>
     <string name="AGramKeepDeletedInfo">Keeps messages already received by this device when they are deleted on Telegram. Applies to regular private chats, groups, and channels. Secret chats, self-destructing media, auto-delete, and ephemeral messages are excluded. Media remains available only if it was downloaded before deletion. This setting is local to this account on this device.</string>
-    <string name="AGramDeletedOnServer">Deleted on server</string>
+    <string name="AGramDeletedOnServer">{DELETED}</string>
     <string name="AGramAccountFrozen">Account frozen</string>
     <string name="AGramAccountBlocked">Blocked or session revoked · local profile</string>
 </resources>

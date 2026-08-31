@@ -1,0 +1,541 @@
+/*
+ * This file is part of Agram and is licensed under GNU GPL v2 or later.
+ */
+package org.telegram.messenger;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.os.Build;
+import android.text.TextUtils;
+import android.util.Base64;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
+import java.util.Locale;
+import java.util.TimeZone;
+import java.util.UUID;
+
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
+
+/**
+ * Local registry that turns every Telegram engine slot into an explicitly
+ * named, independently keyed Agram container. The registry itself contains
+ * only slot-to-random-id mappings; private metadata is encrypted with a key
+ * that never leaves Android Keystore.
+ */
+public final class AgramContainerManager {
+
+    public static final int PROFILE_COMPATIBLE = 0;
+    public static final int PROFILE_MINIMAL = 1;
+
+    public static final int NOTIFICATION_HIDDEN = 0;
+    public static final int NOTIFICATION_AUTHOR = 1;
+    public static final int NOTIFICATION_FULL = 2;
+
+    private static final String REGISTRY = "agram_container_registry";
+    private static final String SLOT_PREFIX = "slot_";
+    private static final String METADATA_PREFIX = "metadata_";
+    private static final int SCHEMA_VERSION = 1;
+    private static final int PIN_ITERATIONS = 160_000;
+
+    private static volatile AgramContainerManager instance;
+
+    private final SharedPreferences preferences;
+    private final SecureRandom secureRandom = new SecureRandom();
+    private final Object sync = new Object();
+
+    public static AgramContainerManager getInstance() {
+        AgramContainerManager local = instance;
+        if (local == null) {
+            synchronized (AgramContainerManager.class) {
+                local = instance;
+                if (local == null) {
+                    instance = local = new AgramContainerManager();
+                }
+            }
+        }
+        return local;
+    }
+
+    private AgramContainerManager() {
+        preferences = ApplicationLoader.applicationContext.getSharedPreferences(REGISTRY, Context.MODE_PRIVATE);
+    }
+
+    public ContainerRecord ensureContainer(int account) {
+        synchronized (sync) {
+            String id = preferences.getString(SLOT_PREFIX + account, null);
+            if (!TextUtils.isEmpty(id)) {
+                ContainerRecord record = readRecord(account, id);
+                if (record != null) {
+                    return record;
+                }
+            }
+            ContainerRecord record = createDefault(account);
+            saveRecord(record);
+            return record;
+        }
+    }
+
+    public ContainerRecord getContainer(int account) {
+        synchronized (sync) {
+            String id = preferences.getString(SLOT_PREFIX + account, null);
+            return TextUtils.isEmpty(id) ? null : readRecord(account, id);
+        }
+    }
+
+    public void updatePreLoginProfile(int account, String name, int color, int profileMode,
+                                      String languageCode, boolean fixedTimezone, int timezoneOffset,
+                                      String pin, boolean biometricEnabled, int notificationPrivacy) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            if (record.profileLocked) {
+                throw new IllegalStateException("Session profile is already locked for this container");
+            }
+            record.name = TextUtils.isEmpty(name) ? defaultName(account) : name.trim();
+            record.color = color;
+            record.profileMode = profileMode == PROFILE_COMPATIBLE ? PROFILE_COMPATIBLE : PROFILE_MINIMAL;
+            record.languageCode = normalizeLanguage(languageCode);
+            record.fixedTimezone = fixedTimezone;
+            record.timezoneOffset = fixedTimezone ? timezoneOffset : systemTimezoneOffset();
+            record.profileId = UUID.randomUUID().toString();
+            record.profileGeneratedAt = System.currentTimeMillis();
+            record.biometricEnabled = biometricEnabled;
+            record.notificationPrivacy = normalizeNotificationPrivacy(notificationPrivacy);
+            if (!TextUtils.isEmpty(pin)) {
+                setPin(record, pin);
+            } else {
+                record.pinSalt = null;
+                record.pinHash = null;
+            }
+            saveRecord(record);
+        }
+    }
+
+    public void markAuthorized(int account) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            record.profileLocked = true;
+            saveRecord(record);
+        }
+    }
+
+    public boolean verifyPin(int account, String pin) {
+        ContainerRecord record = getContainer(account);
+        if (record == null || TextUtils.isEmpty(record.pinSalt) || TextUtils.isEmpty(record.pinHash)) {
+            return true;
+        }
+        try {
+            byte[] salt = Base64.decode(record.pinSalt, Base64.NO_WRAP);
+            byte[] expected = Base64.decode(record.pinHash, Base64.NO_WRAP);
+            byte[] actual = derivePin(pin, salt);
+            int diff = expected.length ^ actual.length;
+            for (int i = 0; i < Math.min(expected.length, actual.length); i++) {
+                diff |= expected[i] ^ actual[i];
+            }
+            return diff == 0;
+        } catch (Exception e) {
+            FileLog.e("Unable to verify Agram container PIN", e);
+            return false;
+        }
+    }
+
+    public void setNotificationPrivacy(int account, int notificationPrivacy) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            record.notificationPrivacy = normalizeNotificationPrivacy(notificationPrivacy);
+            saveRecord(record);
+        }
+    }
+
+    public void updateContainerSecurity(int account, String name, String newPin,
+                                        boolean biometricEnabled, int notificationPrivacy) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            record.name = TextUtils.isEmpty(name) ? defaultName(account) : name.trim();
+            if (!TextUtils.isEmpty(newPin)) {
+                setPin(record, newPin);
+            }
+            record.biometricEnabled = biometricEnabled && record.hasPin();
+            record.notificationPrivacy = normalizeNotificationPrivacy(notificationPrivacy);
+            saveRecord(record);
+        }
+    }
+
+    public void deleteContainer(int account) {
+        synchronized (sync) {
+            String id = preferences.getString(SLOT_PREFIX + account, null);
+            if (TextUtils.isEmpty(id)) {
+                return;
+            }
+            // Delete the wrapping key first. Any residual ciphertext becomes
+            // irrecoverable before best-effort file cleanup starts.
+            AgramSecureStore.deleteKey(id);
+            preferences.edit()
+                    .remove(SLOT_PREFIX + account)
+                    .remove(METADATA_PREFIX + id)
+                    .commit();
+            Utilities.globalQueue.postRunnable(() -> deleteRecursively(getContainerDirectory(id)));
+        }
+    }
+
+    public File getContainerDirectory(int account) {
+        ContainerRecord record = ensureContainer(account);
+        return getContainerDirectory(record.id);
+    }
+
+    public SessionProfile resolveSessionProfile(int account, String compatibleDeviceModel,
+                                                String compatibleSystemVersion, String appVersion,
+                                                String compatibleLanguage, String compatibleSystemLanguage,
+                                                int compatibleTimezoneOffset) {
+        ContainerRecord record = ensureContainer(account);
+        if (record.profileMode == PROFILE_COMPATIBLE) {
+            return new SessionProfile(
+                    compatibleDeviceModel,
+                    compatibleSystemVersion,
+                    appVersion,
+                    compatibleLanguage,
+                    compatibleSystemLanguage,
+                    compatibleTimezoneOffset
+            );
+        }
+        String language = normalizeLanguage(record.languageCode);
+        return new SessionProfile(
+                "Agram Android",
+                "Android " + androidMajorVersion(),
+                appVersion,
+                language,
+                language,
+                record.fixedTimezone ? record.timezoneOffset : systemTimezoneOffset()
+        );
+    }
+
+    public static final class SessionProfile {
+        public final String deviceModel;
+        public final String systemVersion;
+        public final String appVersion;
+        public final String languageCode;
+        public final String systemLanguageCode;
+        public final int timezoneOffset;
+
+        private SessionProfile(String deviceModel, String systemVersion, String appVersion,
+                               String languageCode, String systemLanguageCode, int timezoneOffset) {
+            this.deviceModel = deviceModel;
+            this.systemVersion = systemVersion;
+            this.appVersion = appVersion;
+            this.languageCode = languageCode;
+            this.systemLanguageCode = systemLanguageCode;
+            this.timezoneOffset = timezoneOffset;
+        }
+    }
+
+    public static final class ContainerRecord {
+        public String id;
+        public int account;
+        public String name;
+        public int color;
+        public long createdAt;
+        public int profileMode;
+        public String profileId;
+        public long profileGeneratedAt;
+        public boolean profileLocked;
+        public String languageCode;
+        public boolean fixedTimezone;
+        public int timezoneOffset;
+        public String proxyMode;
+        public boolean proxyEnabled;
+        public String proxyAddress;
+        public int proxyPort;
+        public String proxyUsername;
+        public String proxyPassword;
+        public String proxySecret;
+        public String pushMode;
+        public int notificationPrivacy;
+        public String pinSalt;
+        public String pinHash;
+        public boolean biometricEnabled;
+
+        public boolean hasPin() {
+            return !TextUtils.isEmpty(pinHash) && !TextUtils.isEmpty(pinSalt);
+        }
+    }
+
+    public void saveProxySettings(int account, boolean enabled, String address, int port,
+                                  String username, String password, String secret) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            record.proxyEnabled = enabled && !TextUtils.isEmpty(address);
+            record.proxyMode = record.proxyEnabled ? "custom" : "direct";
+            record.proxyAddress = safe(address);
+            record.proxyPort = port > 0 && port <= 65535 ? port : 1080;
+            record.proxyUsername = safe(username);
+            record.proxyPassword = safe(password);
+            record.proxySecret = safe(secret);
+            saveRecord(record);
+        }
+    }
+
+    public ProxyProfile getProxyProfile(int account) {
+        ContainerRecord record = ensureContainer(account);
+        return new ProxyProfile(
+                record.proxyEnabled,
+                safe(record.proxyAddress),
+                record.proxyPort > 0 ? record.proxyPort : 1080,
+                safe(record.proxyUsername),
+                safe(record.proxyPassword),
+                safe(record.proxySecret)
+        );
+    }
+
+    /**
+     * Projects the selected container's encrypted proxy record into Telegram's
+     * legacy settings UI. The native engines still receive settings per account.
+     */
+    public void publishProxyForSelectedContainer(int account) {
+        ProxyProfile proxy = getProxyProfile(account);
+        ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("proxy_enabled", proxy.enabled)
+                .putString("proxy_ip", proxy.address)
+                .putInt("proxy_port", proxy.port)
+                .putString("proxy_user", proxy.username)
+                .putString("proxy_pass", proxy.password)
+                .putString("proxy_secret", proxy.secret)
+                .commit();
+    }
+
+    public static final class ProxyProfile {
+        public final boolean enabled;
+        public final String address;
+        public final int port;
+        public final String username;
+        public final String password;
+        public final String secret;
+
+        private ProxyProfile(boolean enabled, String address, int port, String username, String password, String secret) {
+            this.enabled = enabled;
+            this.address = address;
+            this.port = port;
+            this.username = username;
+            this.password = password;
+            this.secret = secret;
+        }
+    }
+
+    private ContainerRecord createDefault(int account) {
+        ContainerRecord record = new ContainerRecord();
+        record.id = UUID.randomUUID().toString();
+        record.account = account;
+        record.name = defaultName(account);
+        record.color = defaultColor(account);
+        record.createdAt = System.currentTimeMillis();
+        record.profileMode = PROFILE_MINIMAL;
+        record.profileId = UUID.randomUUID().toString();
+        record.profileGeneratedAt = System.currentTimeMillis();
+        record.profileLocked = UserConfig.getInstance(account).isClientActivated();
+        record.languageCode = normalizeLanguage(Locale.getDefault().getLanguage());
+        record.timezoneOffset = systemTimezoneOffset();
+        SharedPreferences global = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Context.MODE_PRIVATE);
+        record.proxyAddress = global.getString("proxy_ip", "");
+        record.proxyPort = global.getInt("proxy_port", 1080);
+        record.proxyUsername = global.getString("proxy_user", "");
+        record.proxyPassword = global.getString("proxy_pass", "");
+        record.proxySecret = global.getString("proxy_secret", "");
+        record.proxyEnabled = global.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(record.proxyAddress);
+        record.proxyMode = record.proxyEnabled ? "custom" : "direct";
+        record.pushMode = "none";
+        record.notificationPrivacy = NOTIFICATION_HIDDEN;
+        File directory = getContainerDirectory(record.id);
+        if (!directory.exists() && !directory.mkdirs()) {
+            FileLog.e("Unable to create Agram container directory " + directory);
+        }
+        return record;
+    }
+
+    private void saveRecord(ContainerRecord record) {
+        try {
+            byte[] clear = toJson(record).toString().getBytes(StandardCharsets.UTF_8);
+            byte[] encrypted = AgramSecureStore.encrypt(record.id, clear, AgramSecureStore.aad(record.id, "metadata"));
+            preferences.edit()
+                    .putString(SLOT_PREFIX + record.account, record.id)
+                    .putString(METADATA_PREFIX + record.id, Base64.encodeToString(encrypted, Base64.NO_WRAP))
+                    .commit();
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to persist Agram container", e);
+        }
+    }
+
+    private ContainerRecord readRecord(int account, String id) {
+        try {
+            String encoded = preferences.getString(METADATA_PREFIX + id, null);
+            if (TextUtils.isEmpty(encoded)) {
+                return null;
+            }
+            byte[] encrypted = Base64.decode(encoded, Base64.NO_WRAP);
+            byte[] clear = AgramSecureStore.decrypt(id, encrypted, AgramSecureStore.aad(id, "metadata"));
+            ContainerRecord record = fromJson(new JSONObject(new String(clear, StandardCharsets.UTF_8)));
+            if (record.account != account || !id.equals(record.id)) {
+                throw new GeneralSecurityException("Container registry mismatch");
+            }
+            return record;
+        } catch (Exception e) {
+            FileLog.e("Unable to read Agram container " + account, e);
+            return null;
+        }
+    }
+
+    private JSONObject toJson(ContainerRecord record) throws JSONException {
+        JSONObject json = new JSONObject();
+        json.put("schema", SCHEMA_VERSION);
+        json.put("id", record.id);
+        json.put("account", record.account);
+        json.put("name", record.name);
+        json.put("color", record.color);
+        json.put("created_at", record.createdAt);
+        json.put("profile_mode", record.profileMode);
+        json.put("profile_id", record.profileId);
+        json.put("profile_generated_at", record.profileGeneratedAt);
+        json.put("profile_locked", record.profileLocked);
+        json.put("language", record.languageCode);
+        json.put("fixed_timezone", record.fixedTimezone);
+        json.put("timezone_offset", record.timezoneOffset);
+        json.put("proxy_mode", record.proxyMode);
+        json.put("proxy_enabled", record.proxyEnabled);
+        json.put("proxy_address", record.proxyAddress);
+        json.put("proxy_port", record.proxyPort);
+        json.put("proxy_username", record.proxyUsername);
+        json.put("proxy_password", record.proxyPassword);
+        json.put("proxy_secret", record.proxySecret);
+        json.put("push_mode", record.pushMode);
+        json.put("notification_privacy", record.notificationPrivacy);
+        json.put("pin_salt", record.pinSalt);
+        json.put("pin_hash", record.pinHash);
+        json.put("biometric", record.biometricEnabled);
+        return json;
+    }
+
+    private ContainerRecord fromJson(JSONObject json) throws JSONException {
+        if (json.optInt("schema", 0) != SCHEMA_VERSION) {
+            throw new JSONException("Unsupported Agram container schema");
+        }
+        ContainerRecord record = new ContainerRecord();
+        record.id = json.getString("id");
+        record.account = json.getInt("account");
+        record.name = json.optString("name", defaultName(record.account));
+        record.color = json.optInt("color", defaultColor(record.account));
+        record.createdAt = json.optLong("created_at", 0);
+        record.profileMode = json.optInt("profile_mode", PROFILE_MINIMAL);
+        record.profileId = json.optString("profile_id", UUID.randomUUID().toString());
+        record.profileGeneratedAt = json.optLong("profile_generated_at", record.createdAt);
+        record.profileLocked = json.optBoolean("profile_locked", false);
+        record.languageCode = normalizeLanguage(json.optString("language", "en"));
+        record.fixedTimezone = json.optBoolean("fixed_timezone", false);
+        record.timezoneOffset = json.optInt("timezone_offset", systemTimezoneOffset());
+        record.proxyMode = json.optString("proxy_mode", "direct");
+        record.proxyEnabled = json.optBoolean("proxy_enabled", false);
+        record.proxyAddress = json.optString("proxy_address", "");
+        record.proxyPort = json.optInt("proxy_port", 1080);
+        record.proxyUsername = json.optString("proxy_username", "");
+        record.proxyPassword = json.optString("proxy_password", "");
+        record.proxySecret = json.optString("proxy_secret", "");
+        record.pushMode = json.optString("push_mode", "none");
+        record.notificationPrivacy = normalizeNotificationPrivacy(json.optInt("notification_privacy", NOTIFICATION_HIDDEN));
+        record.pinSalt = nullable(json, "pin_salt");
+        record.pinHash = nullable(json, "pin_hash");
+        record.biometricEnabled = json.optBoolean("biometric", false);
+        return record;
+    }
+
+    private void setPin(ContainerRecord record, String pin) {
+        if (pin.length() < 6) {
+            throw new IllegalArgumentException("Container PIN must contain at least 6 characters");
+        }
+        try {
+            byte[] salt = new byte[16];
+            secureRandom.nextBytes(salt);
+            record.pinSalt = Base64.encodeToString(salt, Base64.NO_WRAP);
+            record.pinHash = Base64.encodeToString(derivePin(pin, salt), Base64.NO_WRAP);
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to protect container PIN", e);
+        }
+    }
+
+    private static byte[] derivePin(String pin, byte[] salt) throws Exception {
+        PBEKeySpec spec = new PBEKeySpec(pin.toCharArray(), salt, PIN_ITERATIONS, 256);
+        try {
+            return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).getEncoded();
+        } finally {
+            spec.clearPassword();
+        }
+    }
+
+    private static String nullable(JSONObject json, String key) {
+        return json.isNull(key) ? null : json.optString(key, null);
+    }
+
+    private static String defaultName(int account) {
+        return "Container " + (account + 1);
+    }
+
+    private static int defaultColor(int account) {
+        int[] colors = {0xff2f5bea, 0xff4caf50, 0xff9c27b0, 0xffff8f00, 0xff00897b, 0xffd84315};
+        return colors[Math.abs(account) % colors.length];
+    }
+
+    private static int systemTimezoneOffset() {
+        TimeZone zone = TimeZone.getDefault();
+        return zone.getOffset(System.currentTimeMillis()) / 1000;
+    }
+
+    private static String normalizeLanguage(String value) {
+        if (TextUtils.isEmpty(value)) {
+            return "en";
+        }
+        String normalized = value.trim().toLowerCase(Locale.US).replace('_', '-');
+        return normalized.matches("[a-z]{2,3}(-[a-z0-9]{2,8})?") ? normalized : "en";
+    }
+
+    private static int normalizeNotificationPrivacy(int value) {
+        if (value == NOTIFICATION_AUTHOR || value == NOTIFICATION_FULL) {
+            return value;
+        }
+        return NOTIFICATION_HIDDEN;
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static String androidMajorVersion() {
+        String release = Build.VERSION.RELEASE;
+        if (TextUtils.isEmpty(release)) {
+            return Integer.toString(Build.VERSION.SDK_INT);
+        }
+        int dot = release.indexOf('.');
+        return dot > 0 ? release.substring(0, dot) : release;
+    }
+
+    private static File getContainerDirectory(String id) {
+        return new File(ApplicationLoader.applicationContext.getFilesDir(), "agram_containers/" + id);
+    }
+
+    private static void deleteRecursively(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                deleteRecursively(child);
+            }
+        }
+        if (!file.delete()) {
+            FileLog.e("Unable to delete Agram container file " + file);
+        }
+    }
+}

@@ -266,9 +266,10 @@
     <string name="RemindDayAt">\'Отправить\' d MMM \'в\' HH:mm</string>
     <string name="RemindDayYearAt">\'Напомнить\' d MMM yyyy \'в\' HH:mm</string>
     <string name="AGramSettingsSection">ά‑Gram</string>
+    <string name="AGramContainerSecurity">Защита контейнера</string>
     <string name="AGramKeepDeletedMessages">Сохранять удалённые сообщения</string>
     <string name="AGramKeepDeletedInfo">Сохраняет уже полученные этим устройством сообщения, когда их удаляют из Telegram. Работает в обычных личных чатах, группах и каналах. Секретные чаты, самоуничтожающиеся медиа, автоудаление и эфемерные сообщения исключены. Медиа останется доступным, только если оно было загружено до удаления. Настройка действует локально для этого аккаунта на этом устройстве.</string>
-    <string name="AGramDeletedOnServer">Удалено на сервере</string>
+    <string name="AGramDeletedOnServer">{DELETED}</string>
     <string name="AGramAccountFrozen">Аккаунт заморожен</string>
     <string name="AGramAccountBlocked">Заблокирован или сессия отозвана · локальный профиль</string>
 </resources>

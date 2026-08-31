@@ -4103,6 +4103,10 @@ public class NotificationsController extends BaseController implements Notificat
         }
         try {
             getConnectionsManager().resumeNetworkMaybe();
+            final int containerNotificationPrivacy = AgramContainerManager.getInstance()
+                    .ensureContainer(currentAccount).notificationPrivacy;
+            final boolean hideContainerIdentity = containerNotificationPrivacy == AgramContainerManager.NOTIFICATION_HIDDEN;
+            final boolean hideContainerPreview = containerNotificationPrivacy != AgramContainerManager.NOTIFICATION_FULL;
 
             Object lastNotification = null;
             long maxDate = 0;
@@ -4243,7 +4247,7 @@ public class NotificationsController extends BaseController implements Notificat
             } else {
                 chatName = UserObject.getUserName(user);
             }
-            boolean passcode = AndroidUtilities.needShowPasscode() || SharedConfig.isWaitingForPasscodeEnter;
+            boolean passcode = AndroidUtilities.needShowPasscode() || SharedConfig.isWaitingForPasscodeEnter || hideContainerIdentity;
             final boolean allowSummary = !"samsung".equalsIgnoreCase(Build.MANUFACTURER);
             if (DialogObject.isEncryptedDialog(dialog_id) || allowSummary && pushDialogs.size() > 1 || passcode) {
                 if (passcode) {
@@ -4346,6 +4350,15 @@ public class NotificationsController extends BaseController implements Notificat
                 }
                 inboxStyle.setSummaryText(detailText);
                 mBuilder.setStyle(inboxStyle);
+            }
+
+            if (hideContainerPreview) {
+                String protectedText = LocaleController.getString(R.string.NotificationHiddenMessage);
+                lastMessage = protectedText;
+                detailText = protectedText;
+                photoPath = null;
+                mBuilder.setContentText(protectedText);
+                mBuilder.setStyle(new NotificationCompat.BigTextStyle().bigText(protectedText));
             }
 
             if (!notifyAboutLast || !value || MediaController.getInstance().isRecordingAudio() || silent == 1) {
@@ -4910,7 +4923,11 @@ public class NotificationsController extends BaseController implements Notificat
         }
 
         long selfUserId = getUserConfig().getClientUserId();
-        boolean waitingForPasscode = AndroidUtilities.needShowPasscode() || SharedConfig.isWaitingForPasscodeEnter;
+        final int containerNotificationPrivacy = AgramContainerManager.getInstance()
+                .ensureContainer(currentAccount).notificationPrivacy;
+        final boolean hideContainerIdentity = containerNotificationPrivacy == AgramContainerManager.NOTIFICATION_HIDDEN;
+        final boolean hideContainerPreview = containerNotificationPrivacy != AgramContainerManager.NOTIFICATION_FULL;
+        boolean waitingForPasscode = AndroidUtilities.needShowPasscode() || SharedConfig.isWaitingForPasscodeEnter || hideContainerIdentity;
         boolean passcode = SharedConfig.passcodeHash.length() > 0;
         FileLog.d("showExtraNotifications: passcode="+passcode+" waitingForPasscode=" + waitingForPasscode + " selfUserId=" + selfUserId + " useSummaryNotification=" + useSummaryNotification);
 
@@ -5100,6 +5117,11 @@ public class NotificationsController extends BaseController implements Notificat
                     name = LocaleController.getString(R.string.NotificationHiddenName);
                 }
                 photoPath = null;
+                canReply = false;
+            }
+            if (hideContainerPreview) {
+                photoPath = null;
+                avatarBitmap = null;
                 canReply = false;
             }
 
@@ -5596,6 +5618,14 @@ public class NotificationsController extends BaseController implements Notificat
                     .extend(wearableExtender)
                     .setSortKey(String.valueOf(Long.MAX_VALUE - date))
                     .setCategory(NotificationCompat.CATEGORY_MESSAGE);
+
+            if (hideContainerPreview) {
+                String protectedText = LocaleController.getString(R.string.NotificationHiddenMessage);
+                builder.setContentTitle(hideContainerIdentity ? LocaleController.getString(R.string.AppName) : name);
+                builder.setContentText(protectedText);
+                builder.setStyle(new NotificationCompat.BigTextStyle().bigText(protectedText));
+                builder.setLargeIcon((Bitmap) null);
+            }
 
             try {
                 Intent dismissIntent = new Intent(ApplicationLoader.applicationContext, NotificationDismissReceiver.class);

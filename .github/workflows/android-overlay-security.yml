@@ -1,0 +1,27 @@
+name: Android overlay security
+
+on:
+  push:
+    paths:
+      - "android/**"
+      - ".github/scripts/verify_android_overlay.py"
+      - ".github/workflows/android-overlay-security.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/scripts/verify_android_overlay.py"
+      - ".github/workflows/android-overlay-security.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-overlay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify credentials, permissions, backup and retention boundaries
+        run: python .github/scripts/verify_android_overlay.py

@@ -14421,7 +14421,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
 
                     if (getParentActivity() == null) return;
                     if (!UserConfig.getInstance(account).isClientActivated()) {
-                        presentFragment(new LoginActivity(account));
+                        presentFragment(new AgramContainerSetupActivity(account));
                         return;
                     }
                     final DialogsActivityDelegate oldDelegate = delegate;

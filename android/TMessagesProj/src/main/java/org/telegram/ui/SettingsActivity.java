@@ -796,7 +796,7 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         if (item.instanceOf(AccountCell.Factory.class)) {
             final int account = item.intValue;
             if (!UserConfig.getInstance(account).isClientActivated()) {
-                presentFragment(new LoginActivity(account));
+                presentFragment(new AgramContainerSetupActivity(account));
                 return;
             }
             if (LaunchActivity.instance != null) {

@@ -120,6 +120,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.telegram.PhoneFormat.PhoneFormat;
 import org.telegram.messenger.AccountInstance;
+import org.telegram.messenger.AgramContainerManager;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.AuthTokensHelper;
@@ -465,12 +466,14 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
 
     public LoginActivity() {
         super();
+        AgramContainerManager.getInstance().ensureContainer(currentAccount);
     }
 
     public LoginActivity(int account) {
         super();
         currentAccount = account;
         newAccount = true;
+        AgramContainerManager.getInstance().ensureContainer(currentAccount);
     }
 
     public LoginActivity changeEmail(Runnable onFinishCallback) {
@@ -1657,6 +1660,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         UserConfig.getInstance(currentAccount).syncContacts = syncContacts;
         UserConfig.getInstance(currentAccount).setCurrentUser(res.user);
         UserConfig.getInstance(currentAccount).saveConfig(true);
+        AgramContainerManager.getInstance().markAuthorized(currentAccount);
         MessagesStorage.getInstance(currentAccount).cleanup(true);
         ArrayList<TLRPC.User> users = new ArrayList<>();
         users.add(res.user);
