@@ -464,6 +464,28 @@ void setSystemLangCode(JNIEnv *env, jclass c, jint instanceNum, jstring langCode
     }
 }
 
+void setSessionProfile(JNIEnv *env, jclass c, jint instanceNum, jstring deviceModel, jstring systemVersion, jstring appVersion, jstring langCode, jstring systemLangCode, jint timezoneOffset) {
+    const char *deviceModelStr = env->GetStringUTFChars(deviceModel, 0);
+    const char *systemVersionStr = env->GetStringUTFChars(systemVersion, 0);
+    const char *appVersionStr = env->GetStringUTFChars(appVersion, 0);
+    const char *langCodeStr = env->GetStringUTFChars(langCode, 0);
+    const char *systemLangCodeStr = env->GetStringUTFChars(systemLangCode, 0);
+
+    ConnectionsManager::getInstance(instanceNum).setSessionProfile(
+            std::string(deviceModelStr),
+            std::string(systemVersionStr),
+            std::string(appVersionStr),
+            std::string(langCodeStr),
+            std::string(systemLangCodeStr),
+            timezoneOffset);
+
+    env->ReleaseStringUTFChars(deviceModel, deviceModelStr);
+    env->ReleaseStringUTFChars(systemVersion, systemVersionStr);
+    env->ReleaseStringUTFChars(appVersion, appVersionStr);
+    env->ReleaseStringUTFChars(langCode, langCodeStr);
+    env->ReleaseStringUTFChars(systemLangCode, systemLangCodeStr);
+}
+
 void init(JNIEnv *env, jclass c, jint instanceNum, jint version, jint layer, jint apiId, jstring deviceModel, jstring systemVersion, jstring appVersion, jstring langCode, jstring systemLangCode, jstring configPath, jstring logPath, jstring regId, jstring cFingerprint, jstring installerId, jstring packageId, jint timezoneOffset, jlong userId, jboolean userPremium, jboolean enablePushConnection, jboolean hasNetwork, jint networkType, jint performanceClass) {
     const char *deviceModelStr = env->GetStringUTFChars(deviceModel, 0);
     const char *systemVersionStr = env->GetStringUTFChars(systemVersion, 0);
@@ -542,6 +564,7 @@ static JNINativeMethod ConnectionsManagerMethods[] = {
         {"native_setLangCode", "(ILjava/lang/String;)V", (void *) setLangCode},
         {"native_setRegId", "(ILjava/lang/String;)V", (void *) setRegId},
         {"native_setSystemLangCode", "(ILjava/lang/String;)V", (void *) setSystemLangCode},
+        {"native_setSessionProfile", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V", (void *) setSessionProfile},
         {"native_switchBackend", "(IZ)V", (void *) switchBackend},
         {"native_pauseNetwork", "(I)V", (void *) pauseNetwork},
         {"native_resumeNetwork", "(IZ)V", (void *) resumeNetwork},

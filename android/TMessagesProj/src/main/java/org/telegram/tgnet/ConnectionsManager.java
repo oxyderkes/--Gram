@@ -123,6 +123,13 @@ public class ConnectionsManager extends BaseController {
     private AtomicInteger lastRequestToken = new AtomicInteger(1);
     private int appResumeCount;
 
+    private String compatibleDeviceModel;
+    private String compatibleSystemVersion;
+    private String compatibleAppVersion;
+    private String compatibleLangCode;
+    private String compatibleSystemLangCode;
+    private int compatibleTimezoneOffset;
+
     private static AsyncTask currentTask;
 
     private static HashMap<String, ResolveHostByNameTask> resolvingHostnameTasks = new HashMap<>();
@@ -256,6 +263,12 @@ public class ConnectionsManager extends BaseController {
         String fingerprint = AndroidUtilities.getCertificateSHA256Fingerprint();
 
         int timezoneOffset = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000;
+        compatibleDeviceModel = deviceModel;
+        compatibleSystemVersion = systemVersion;
+        compatibleAppVersion = appVersion;
+        compatibleLangCode = langCode;
+        compatibleSystemLangCode = systemLangCode;
+        compatibleTimezoneOffset = timezoneOffset;
         AgramContainerManager.SessionProfile sessionProfile = AgramContainerManager.getInstance().resolveSessionProfile(
                 currentAccount,
                 deviceModel,
@@ -283,6 +296,33 @@ public class ConnectionsManager extends BaseController {
             userPremium = getUserConfig().getCurrentUser().premium;
         }
         init(SharedConfig.buildVersion(), TLRPC.LAYER, BuildVars.APP_ID, deviceModel, systemVersion, appVersion, langCode, systemLangCode, configPath, FileLog.getNetworkLogPath(), pushString, fingerprint, timezoneOffset, getUserConfig().getClientUserId(), userPremium, enablePushConnection);
+    }
+
+    /**
+     * Re-applies a profile saved by the offline container screen. The network
+     * singleton may already exist because Intro requests remote configuration;
+     * resetting the native init version guarantees that the authorization
+     * request is wrapped in a fresh initConnection with the selected labels.
+     */
+    public void applyAgramSessionProfile() {
+        AgramContainerManager.SessionProfile profile = AgramContainerManager.getInstance().resolveSessionProfile(
+                currentAccount,
+                compatibleDeviceModel,
+                compatibleSystemVersion,
+                compatibleAppVersion,
+                compatibleLangCode,
+                compatibleSystemLangCode,
+                compatibleTimezoneOffset
+        );
+        native_setSessionProfile(
+                currentAccount,
+                profile.deviceModel,
+                profile.systemVersion,
+                profile.appVersion,
+                profile.languageCode,
+                profile.systemLanguageCode,
+                profile.timezoneOffset
+        );
     }
 
     private String getRegId() {
@@ -1009,6 +1049,7 @@ public class ConnectionsManager extends BaseController {
     public static native int native_getConnectionState(int currentAccount);
     public static native void native_setUserId(int currentAccount, long id);
     public static native void native_init(int currentAccount, int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, String installer, String packageId, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection, boolean hasNetwork, int networkType, int performanceClass);
+    private static native void native_setSessionProfile(int currentAccount, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, int timezoneOffset);
     public static native void native_setProxySettings(int currentAccount, String address, int port, String username, String password, String secret);
     public static native void native_setLangCode(int currentAccount, String langCode);
     public static native void native_setRegId(int currentAccount, String regId);

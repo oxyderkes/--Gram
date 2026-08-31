@@ -467,6 +467,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     public LoginActivity() {
         super();
         AgramContainerManager.getInstance().ensureContainer(currentAccount);
+        ConnectionsManager.getInstance(currentAccount).applyAgramSessionProfile();
     }
 
     public LoginActivity(int account) {
@@ -474,6 +475,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         currentAccount = account;
         newAccount = true;
         AgramContainerManager.getInstance().ensureContainer(currentAccount);
+        ConnectionsManager.getInstance(currentAccount).applyAgramSessionProfile();
     }
 
     public LoginActivity changeEmail(Runnable onFinishCallback) {

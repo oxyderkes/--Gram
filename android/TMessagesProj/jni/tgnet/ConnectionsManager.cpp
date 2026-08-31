@@ -3780,6 +3780,30 @@ void ConnectionsManager::setSystemLangCode(std::string langCode) {
     });
 }
 
+void ConnectionsManager::setSessionProfile(std::string deviceModel, std::string systemVersion, std::string appVersion, std::string langCode, std::string systemLangCode, int32_t timezoneOffset) {
+    scheduleTask([&, deviceModel, systemVersion, appVersion, langCode, systemLangCode, timezoneOffset] {
+        if (currentDeviceModel == deviceModel
+                && currentSystemVersion == systemVersion
+                && currentAppVersion == appVersion
+                && currentLangCode == langCode
+                && currentSystemLangCode == systemLangCode
+                && currentDeviceTimezone == timezoneOffset) {
+            return;
+        }
+        currentDeviceModel = deviceModel;
+        currentSystemVersion = systemVersion;
+        currentAppVersion = appVersion;
+        currentLangCode = langCode;
+        currentSystemLangCode = systemLangCode;
+        lastInitSystemLangcode = systemLangCode;
+        currentDeviceTimezone = timezoneOffset;
+        for (auto & datacenter : datacenters) {
+            datacenter.second->resetInitVersion();
+        }
+        saveConfig();
+    });
+}
+
 void ConnectionsManager::resumeNetwork(bool partial) {
     scheduleTask([&, partial] {
         if (lastMonotonicPauseTime != 0) {
