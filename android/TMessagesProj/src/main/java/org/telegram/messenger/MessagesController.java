@@ -1061,12 +1061,27 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void markAllTopicsAsRead(long did) {
+        markAllTopicsAsRead(did, false);
+    }
+
+    public void markAllTopicsAsReadExplicit(long did) {
+        markAllTopicsAsRead(did, true);
+    }
+
+    private void markAllTopicsAsRead(long did, boolean explicit) {
+        if (!explicit && AgramContainerManager.getInstance().shouldSuppressReadReceipt(currentAccount)) {
+            return;
+        }
         getMessagesStorage().loadTopics(did, topics -> {
             AndroidUtilities.runOnUIThread(() -> {
                 if (topics != null) {
                     for (int i = 0; i < topics.size(); i++) {
                         TLRPC.TL_forumTopic topic = topics.get(i);
-                        getMessagesController().markDialogAsRead(did, topic.top_message, 0, topic.topMessage != null ? topic.topMessage.date : 0, false, isMonoForum(did) ? DialogObject.getPeerDialogId(topic.from_id) : topic.id, 0, true, 0);
+                        if (explicit) {
+                            getMessagesController().markDialogAsReadExplicit(did, topic.top_message, 0, topic.topMessage != null ? topic.topMessage.date : 0, false, isMonoForum(did) ? DialogObject.getPeerDialogId(topic.from_id) : topic.id, 0, true, 0);
+                        } else {
+                            getMessagesController().markDialogAsRead(did, topic.top_message, 0, topic.topMessage != null ? topic.topMessage.date : 0, false, isMonoForum(did) ? DialogObject.getPeerDialogId(topic.from_id) : topic.id, 0, true, 0);
+                        }
                         getMessagesStorage().updateRepliesMaxReadId(-did, isMonoForum(did) ? DialogObject.getPeerDialogId(topic.from_id) : topic.id, topic.top_message, 0, true);
                     }
                 }
@@ -1253,6 +1268,7 @@ public class MessagesController extends BaseController implements NotificationCe
         public int maxId;
         public int maxDate;
         public long sendRequestTime;
+        public boolean explicit;
     }
 
     public static class PrintingUser {
@@ -14632,6 +14648,7 @@ public class MessagesController extends BaseController implements NotificationCe
 
     private void completeReadTask(ReadTask task) {
         if (!DialogObject.isEncryptedDialog(task.dialogId)
+                && !task.explicit
                 && AgramContainerManager.getInstance().shouldSuppressReadReceipt(currentAccount)) {
             return;
         }
@@ -14737,7 +14754,18 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void markMentionsAsRead(long dialogId, long topicId) {
+        markMentionsAsRead(dialogId, topicId, false);
+    }
+
+    public void markMentionsAsReadExplicit(long dialogId, long topicId) {
+        markMentionsAsRead(dialogId, topicId, true);
+    }
+
+    private void markMentionsAsRead(long dialogId, long topicId, boolean explicit) {
         if (DialogObject.isEncryptedDialog(dialogId) || dialogId == getUserConfig().getClientUserId()) {
+            return;
+        }
+        if (!explicit && AgramContainerManager.getInstance().shouldSuppressReadReceipt(currentAccount)) {
             return;
         }
         getMessagesStorage().resetMentionsCount(dialogId, topicId, 0);
@@ -14751,6 +14779,18 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void markDialogAsRead(long dialogId, int maxPositiveId, int maxNegativeId, int maxDate, boolean popup, long threadId, int countDiff, boolean readNow, int scheduledCount) {
+        markDialogAsReadInternal(dialogId, maxPositiveId, maxNegativeId, maxDate, popup, threadId, countDiff, readNow, scheduledCount, false);
+    }
+
+    public void markDialogAsReadExplicit(long dialogId, int maxPositiveId, int maxNegativeId, int maxDate, boolean popup, long threadId, int countDiff, boolean readNow, int scheduledCount) {
+        markDialogAsReadInternal(dialogId, maxPositiveId, maxNegativeId, maxDate, popup, threadId, countDiff, readNow, scheduledCount, true);
+    }
+
+    private void markDialogAsReadInternal(long dialogId, int maxPositiveId, int maxNegativeId, int maxDate, boolean popup, long threadId, int countDiff, boolean readNow, int scheduledCount, boolean explicit) {
+        if (!explicit && !DialogObject.isEncryptedDialog(dialogId)
+                && AgramContainerManager.getInstance().shouldSuppressReadReceipt(currentAccount)) {
+            return;
+        }
         boolean createReadTask;
 
         if (threadId != 0) {
@@ -14899,6 +14939,7 @@ public class MessagesController extends BaseController implements NotificationCe
                 }
                 currentReadTask.maxDate = maxDate;
                 currentReadTask.maxId = maxPositiveId;
+                currentReadTask.explicit |= explicit;
                 if (readNow) {
                     completeReadTask(currentReadTask);
                 }

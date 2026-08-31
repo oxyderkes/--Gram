@@ -55,7 +55,6 @@ public final class AgramContainerManager {
     private final SecureRandom secureRandom = new SecureRandom();
     private final Object sync = new Object();
     private final SparseArray<ContainerRecord> recordCache = new SparseArray<>();
-    private final boolean[] allowReadReceiptOnce = new boolean[UserConfig.MAX_ACCOUNT_COUNT];
 
     public static AgramContainerManager getInstance() {
         AgramContainerManager local = instance;
@@ -205,7 +204,6 @@ public final class AgramContainerManager {
             record.ghostMinimizeOnline = minimizeOnline;
             record.ghostReadOnInteraction = readOnInteraction;
             record.ghostWarnBeforeInteraction = warnBeforeInteraction;
-            allowReadReceiptOnce[account] = false;
             saveRecord(record);
         }
     }
@@ -221,7 +219,6 @@ public final class AgramContainerManager {
                 return;
             }
             record.ghostModeEnabled = enabled;
-            allowReadReceiptOnce[account] = false;
             saveRecord(record);
         }
     }
@@ -251,28 +248,9 @@ public final class AgramContainerManager {
         return record.ghostModeEnabled && record.ghostSuppressReadReceipts && record.ghostReadOnInteraction;
     }
 
-    public void allowReadReceiptForInteraction(int account) {
-        if (account < 0 || account >= allowReadReceiptOnce.length || !isReadOnInteractionEnabled(account)) {
-            return;
-        }
-        synchronized (sync) {
-            allowReadReceiptOnce[account] = true;
-        }
-    }
-
     public boolean shouldSuppressReadReceipt(int account) {
         ContainerRecord record = ensureContainer(account);
-        if (!record.ghostModeEnabled || !record.ghostSuppressReadReceipts) {
-            return false;
-        }
-        synchronized (sync) {
-            if (record.ghostReadOnInteraction && account >= 0 && account < allowReadReceiptOnce.length
-                    && allowReadReceiptOnce[account]) {
-                allowReadReceiptOnce[account] = false;
-                return false;
-            }
-        }
-        return true;
+        return record.ghostModeEnabled && record.ghostSuppressReadReceipts;
     }
 
     public void deleteContainer(int account) {
@@ -289,9 +267,6 @@ public final class AgramContainerManager {
                     .remove(METADATA_PREFIX + id)
                     .commit();
             recordCache.remove(account);
-            if (account >= 0 && account < allowReadReceiptOnce.length) {
-                allowReadReceiptOnce[account] = false;
-            }
             Utilities.globalQueue.postRunnable(() -> deleteRecursively(getContainerDirectory(id)));
         }
     }

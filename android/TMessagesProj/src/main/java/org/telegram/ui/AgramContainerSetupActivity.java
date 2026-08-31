@@ -220,7 +220,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
 
         LinearLayout ghostCard = card(context);
         content.addView(ghostCard, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
-        ghostCard.addView(sectionLabel(context, "ПАРАМЕТРЫ СЕКРЕТНОГО РЕЖИМА · BEST EFFORT"));
+        ghostCard.addView(sectionLabel(context, "GHOST MODE"));
         ghostReadSwitch = settingSwitch(context, "Не отправлять отметку о прочтении", record.ghostSuppressReadReceipts);
         ghostStoriesSwitch = settingSwitch(context, "Не показывать просмотр историй", record.ghostSuppressStoryViews);
         ghostTypingSwitch = settingSwitch(context, "Не отправлять typing / recording", record.ghostSuppressTyping);
@@ -241,7 +241,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
 
         TextView ghostNote = text(
                 context,
-                "Главный переключатель находится в шапке списка диалогов. Best effort: клиент подавляет известные запросы активности, но отправка сообщения, реакция, звонок и другие серверные действия всё равно могут раскрыть присутствие.",
+                "Главный переключатель находится в шапке списка диалогов. Клиент подавляет известные запросы активности, но отправка сообщения, реакция, звонок и другие серверные действия всё равно могут раскрыть присутствие.",
                 12,
                 Theme.key_windowBackgroundWhiteGrayText,
                 false

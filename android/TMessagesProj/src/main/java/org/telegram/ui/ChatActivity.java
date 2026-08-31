@@ -16538,7 +16538,8 @@ public class ChatActivity extends BaseFragment implements
         }
         updateFloatingTopicView();
         invalidateChatListViewTopPadding();
-        if (!firstLoading && !paused && !inPreviewMode && (chatMode == 0 || chatMode == MODE_SUGGESTIONS) && !getMessagesController().ignoreSetOnline) {
+        if (!firstLoading && !paused && !inPreviewMode && (chatMode == 0 || chatMode == MODE_SUGGESTIONS)
+                && !getMessagesController().ignoreSetOnline && !shouldPreserveUnreadInGhostMode()) {
             int scheduledRead = 0;
             if ((maxPositiveUnreadId != Integer.MIN_VALUE || maxNegativeUnreadId != Integer.MAX_VALUE)) {
                 int counterDecrement = 0;
@@ -32835,13 +32836,18 @@ public class ChatActivity extends BaseFragment implements
                 && AgramContainerManager.getInstance().shouldWarnBeforeInteraction(currentAccount);
     }
 
+    private boolean shouldPreserveUnreadInGhostMode() {
+        return currentEncryptedChat == null
+                && AgramContainerManager.getInstance().shouldSuppressReadReceipt(currentAccount);
+    }
+
     private void showGhostInteractionWarning(String message, Runnable onContinue) {
         if (getParentActivity() == null) {
             onContinue.run();
             return;
         }
         new AlertDialog.Builder(getParentActivity(), themeDelegate)
-                .setTitle("Ghost Mode · best effort")
+                .setTitle("Ghost Mode")
                 .setMessage(message)
                 .setNegativeButton(LocaleController.getString(R.string.Cancel), null)
                 .setPositiveButton("Продолжить", (dialog, which) -> onContinue.run())
@@ -32853,16 +32859,17 @@ public class ChatActivity extends BaseFragment implements
         if (!manager.isReadOnInteractionEnabled(currentAccount) || DialogObject.isEncryptedDialog(dialog_id)) {
             return;
         }
-        manager.allowReadReceiptForInteraction(currentAccount);
         int maxPositiveId = Integer.MIN_VALUE;
         int maxNegativeId = Integer.MAX_VALUE;
         int maxDate = Integer.MIN_VALUE;
+        ArrayList<MessageObject> unreadMessages = new ArrayList<>();
         if (messages != null) {
             for (int i = 0; i < messages.size(); i++) {
                 MessageObject message = messages.get(i);
                 if (message == null || message.isOut() || !message.isUnread()) {
                     continue;
                 }
+                unreadMessages.add(message);
                 int id = message.getId();
                 if (id > 0) {
                     maxPositiveId = Math.max(maxPositiveId, id);
@@ -32875,7 +32882,7 @@ public class ChatActivity extends BaseFragment implements
             }
         }
         if (maxPositiveId != Integer.MIN_VALUE || maxNegativeId != Integer.MAX_VALUE) {
-            getMessagesController().markDialogAsRead(
+            getMessagesController().markDialogAsReadExplicit(
                     dialog_id,
                     maxPositiveId,
                     maxNegativeId,
@@ -32885,8 +32892,24 @@ public class ChatActivity extends BaseFragment implements
                     0,
                     true,
                     0);
+            for (int i = 0; i < unreadMessages.size(); i++) {
+                unreadMessages.get(i).setIsRead();
+            }
+            newUnreadMessageCount = Math.max(0, newUnreadMessageCount - unreadMessages.size());
         } else {
-            getMessagesController().markDialogAsReadNow(dialog_id, getTopicId());
+            TLRPC.Dialog dialog = getMessagesController().dialogs_dict.get(dialog_id);
+            if (dialog != null && dialog.top_message != 0) {
+                getMessagesController().markDialogAsReadExplicit(
+                        dialog_id,
+                        dialog.top_message,
+                        dialog.top_message,
+                        dialog.last_message_date,
+                        false,
+                        getTopicId(),
+                        0,
+                        true,
+                        0);
+            }
         }
     }
 

@@ -2331,9 +2331,9 @@ public class MessagesStorage extends BaseController {
                         long did = dialogs.keyAt(a);
                         ReadDialog dialog = dialogs.valueAt(a);
                         if (getMessagesController().isForum(did) || isForum(did, FORUM_TYPE_BOT) || getMessagesController().isMonoForumWithManageRights(did)) {
-                            getMessagesController().markAllTopicsAsRead(did);
+                            getMessagesController().markAllTopicsAsReadExplicit(did);
                         }
-                        getMessagesController().markDialogAsRead(did, dialog.lastMid, dialog.lastMid, dialog.date, false, 0, dialog.unreadCount, true, 0);
+                        getMessagesController().markDialogAsReadExplicit(did, dialog.lastMid, dialog.lastMid, dialog.date, false, 0, dialog.unreadCount, true, 0);
                     }
                 });
             } catch (Exception e) {
