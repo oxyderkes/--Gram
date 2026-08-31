@@ -8,8 +8,11 @@ import android.content.pm.PackageInfo;
 import android.content.res.ColorStateList;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.text.Editable;
+import android.text.InputFilter;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.EditText;
@@ -46,6 +49,12 @@ public class AgramContainerSetupActivity extends BaseFragment {
     private EditText pinField;
     private RadioButton minimalProfile;
     private RadioButton compatibleProfile;
+    private RadioButton customProfile;
+    private LinearLayout customProfileFields;
+    private EditText deviceModelField;
+    private EditText systemVersionField;
+    private EditText appVersionField;
+    private TextView detectProfileButton;
     private Switch biometricSwitch;
     private RadioButton hiddenNotifications;
     private RadioButton authorNotifications;
@@ -127,21 +136,58 @@ public class AgramContainerSetupActivity extends BaseFragment {
         profileCard.addView(sectionLabel(context, "ПРОФИЛЬ СЕССИИ"));
 
         minimalProfile = radio(context, "Минимальный", "Telegram увидит нейтральное Agram Android и основную версию Android.");
-        compatibleProfile = radio(context, "Совместимый", "Передаются стандартные значения текущего устройства, как в upstream Telegram.");
+        compatibleProfile = radio(context, "Авто", "Реальные модель устройства, Android/SDK и версия установленной ά‑Gram.");
+        customProfile = radio(context, "Вручную", "Своя постоянная подпись устройства для этой сессии; задаётся до входа.");
         profileCard.addView(minimalProfile);
         profileCard.addView(compatibleProfile);
-        minimalProfile.setChecked(record.profileMode == AgramContainerManager.PROFILE_MINIMAL);
-        compatibleProfile.setChecked(record.profileMode == AgramContainerManager.PROFILE_COMPATIBLE);
-        minimalProfile.setOnClickListener(v -> {
-            minimalProfile.setChecked(true);
-            compatibleProfile.setChecked(false);
-            updatePreview();
-        });
-        compatibleProfile.setOnClickListener(v -> {
-            compatibleProfile.setChecked(true);
-            minimalProfile.setChecked(false);
-            updatePreview();
-        });
+        profileCard.addView(customProfile);
+        minimalProfile.setOnClickListener(v -> selectProfileMode(AgramContainerManager.PROFILE_MINIMAL));
+        compatibleProfile.setOnClickListener(v -> selectProfileMode(AgramContainerManager.PROFILE_COMPATIBLE));
+        customProfile.setOnClickListener(v -> selectProfileMode(AgramContainerManager.PROFILE_CUSTOM));
+
+        customProfileFields = new LinearLayout(context);
+        customProfileFields.setOrientation(LinearLayout.VERTICAL);
+        deviceModelField = profileInput(context, "Модель устройства", valueOrDetected(record.deviceModel, detectedDeviceModel()));
+        systemVersionField = profileInput(context, "Версия системы", valueOrDetected(record.systemVersion, detectedSystemVersion()));
+        appVersionField = profileInput(context, "Версия клиента", valueOrDetected(record.appVersion, detectedAppVersion()));
+        customProfileFields.addView(deviceModelField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, 0, 6, 0, 0));
+        customProfileFields.addView(systemVersionField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, 0, 6, 0, 0));
+        customProfileFields.addView(appVersionField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, 0, 6, 0, 0));
+
+        detectProfileButton = text(context, "ЗАПОЛНИТЬ С ЭТОГО УСТРОЙСТВА", 13, Theme.key_windowBackgroundWhiteBlueText, true);
+        detectProfileButton.setGravity(Gravity.CENTER);
+        detectProfileButton.setBackground(rounded(Theme.getColor(Theme.key_windowBackgroundGray), 10));
+        detectProfileButton.setOnClickListener(v -> fillDetectedProfile());
+        customProfileFields.addView(detectProfileButton, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 44, 0, 8, 0, 0));
+
+        TextView profileNote = text(
+                context,
+                "Допустимо 1–64 печатных символа. Значения не меняют реальную модель телефона и не обходят ограничения Telegram.",
+                12,
+                Theme.key_windowBackgroundWhiteGrayText,
+                false
+        );
+        profileNote.setLineSpacing(AndroidUtilities.dp(2), 1f);
+        customProfileFields.addView(profileNote, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 8, 0, 0));
+        profileCard.addView(customProfileFields, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 4, 0, 0));
+
+        TextWatcher profileWatcher = new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                updatePreview();
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        };
+        deviceModelField.addTextChangedListener(profileWatcher);
+        systemVersionField.addTextChangedListener(profileWatcher);
+        appVersionField.addTextChangedListener(profileWatcher);
 
         preview = text(context, "", 13, Theme.key_windowBackgroundWhiteGrayText, false);
         preview.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -213,6 +259,12 @@ public class AgramContainerSetupActivity extends BaseFragment {
         if (record.profileLocked) {
             minimalProfile.setEnabled(false);
             compatibleProfile.setEnabled(false);
+            customProfile.setEnabled(false);
+            deviceModelField.setEnabled(false);
+            systemVersionField.setEnabled(false);
+            appVersionField.setEnabled(false);
+            detectProfileButton.setEnabled(false);
+            detectProfileButton.setAlpha(.5f);
             if (!activeContainer) {
                 nameField.setEnabled(false);
                 pinField.setVisibility(View.GONE);
@@ -222,6 +274,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
                 fullNotifications.setEnabled(false);
             }
         }
+        selectProfileMode(record.profileMode);
         updatePreview();
         return fragmentView;
     }
@@ -250,14 +303,22 @@ public class AgramContainerSetupActivity extends BaseFragment {
             return;
         }
         if (!record.profileLocked) {
-            int mode = compatibleProfile.isChecked()
-                    ? AgramContainerManager.PROFILE_COMPATIBLE
-                    : AgramContainerManager.PROFILE_MINIMAL;
+            int mode = selectedProfileMode();
+            if (mode == AgramContainerManager.PROFILE_CUSTOM
+                    && (TextUtils.isEmpty(deviceModelField.getText().toString().trim())
+                    || TextUtils.isEmpty(systemVersionField.getText().toString().trim())
+                    || TextUtils.isEmpty(appVersionField.getText().toString().trim()))) {
+                Toast.makeText(getParentActivity(), "Заполните все три поля профиля устройства", Toast.LENGTH_SHORT).show();
+                return;
+            }
             AgramContainerManager.getInstance().updatePreLoginProfile(
                     account,
                     nameField.getText().toString(),
                     record.color,
                     mode,
+                    deviceModelField.getText().toString(),
+                    systemVersionField.getText().toString(),
+                    appVersionField.getText().toString(),
                     Locale.getDefault().getLanguage(),
                     false,
                     TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000,
@@ -273,20 +334,27 @@ public class AgramContainerSetupActivity extends BaseFragment {
         if (preview == null) {
             return;
         }
-        boolean minimal = minimalProfile.isChecked();
-        String appVersion = "unknown";
-        try {
-            PackageInfo info = getParentActivity().getPackageManager().getPackageInfo(getParentActivity().getPackageName(), 0);
-            appVersion = info.versionName + " (" + info.versionCode + ")";
-        } catch (Exception ignore) {
-        }
+        int mode = selectedProfileMode();
+        String appVersion = mode == AgramContainerManager.PROFILE_CUSTOM
+                ? profileText(appVersionField, detectedAppVersion())
+                : detectedAppVersion();
         String release = Build.VERSION.RELEASE;
         int dot = release == null ? -1 : release.indexOf('.');
         if (dot > 0) {
             release = release.substring(0, dot);
         }
-        String model = minimal ? "Agram Android" : (Build.MANUFACTURER + Build.MODEL);
-        String system = minimal ? "Android " + release : "SDK " + Build.VERSION.SDK_INT;
+        String model;
+        String system;
+        if (mode == AgramContainerManager.PROFILE_MINIMAL) {
+            model = "Agram Android";
+            system = "Android " + release;
+        } else if (mode == AgramContainerManager.PROFILE_CUSTOM) {
+            model = profileText(deviceModelField, detectedDeviceModel());
+            system = profileText(systemVersionField, detectedSystemVersion());
+        } else {
+            model = detectedDeviceModel();
+            system = detectedSystemVersion();
+        }
         String language = LocaleController.getSystemLocaleStringIso639().toLowerCase(Locale.US);
         int timezone = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000;
         preview.setText(
@@ -297,6 +365,78 @@ public class AgramContainerSetupActivity extends BaseFragment {
                         "\nlang_code: " + language +
                         "\ntz_offset: " + timezone
         );
+    }
+
+    private void selectProfileMode(int mode) {
+        int normalized = mode == AgramContainerManager.PROFILE_COMPATIBLE
+                || mode == AgramContainerManager.PROFILE_CUSTOM
+                ? mode
+                : AgramContainerManager.PROFILE_MINIMAL;
+        minimalProfile.setChecked(normalized == AgramContainerManager.PROFILE_MINIMAL);
+        compatibleProfile.setChecked(normalized == AgramContainerManager.PROFILE_COMPATIBLE);
+        customProfile.setChecked(normalized == AgramContainerManager.PROFILE_CUSTOM);
+        customProfileFields.setVisibility(normalized == AgramContainerManager.PROFILE_CUSTOM ? View.VISIBLE : View.GONE);
+        updatePreview();
+    }
+
+    private int selectedProfileMode() {
+        if (customProfile != null && customProfile.isChecked()) {
+            return AgramContainerManager.PROFILE_CUSTOM;
+        }
+        if (compatibleProfile != null && compatibleProfile.isChecked()) {
+            return AgramContainerManager.PROFILE_COMPATIBLE;
+        }
+        return AgramContainerManager.PROFILE_MINIMAL;
+    }
+
+    private void fillDetectedProfile() {
+        deviceModelField.setText(detectedDeviceModel());
+        systemVersionField.setText(detectedSystemVersion());
+        appVersionField.setText(detectedAppVersion());
+        deviceModelField.setSelection(deviceModelField.length());
+        updatePreview();
+    }
+
+    private String detectedAppVersion() {
+        try {
+            PackageInfo info = getParentActivity().getPackageManager().getPackageInfo(getParentActivity().getPackageName(), 0);
+            return info.versionName + " (" + info.versionCode + ")";
+        } catch (Exception ignore) {
+            return BuildVars.BUILD_VERSION_STRING;
+        }
+    }
+
+    private static String detectedDeviceModel() {
+        String manufacturer = TextUtils.isEmpty(Build.MANUFACTURER) ? "Android" : Build.MANUFACTURER.trim();
+        String model = TextUtils.isEmpty(Build.MODEL) ? "device" : Build.MODEL.trim();
+        if (model.toLowerCase(Locale.US).startsWith(manufacturer.toLowerCase(Locale.US))) {
+            return model;
+        }
+        return manufacturer + " " + model;
+    }
+
+    private static String detectedSystemVersion() {
+        String release = TextUtils.isEmpty(Build.VERSION.RELEASE) ? "unknown" : Build.VERSION.RELEASE;
+        return "Android " + release + " (SDK " + Build.VERSION.SDK_INT + ")";
+    }
+
+    private static String valueOrDetected(String value, String detected) {
+        return TextUtils.isEmpty(value) ? detected : value;
+    }
+
+    private static String profileText(EditText field, String fallback) {
+        if (field == null || TextUtils.isEmpty(field.getText().toString().trim())) {
+            return fallback;
+        }
+        return field.getText().toString().trim();
+    }
+
+    private static EditText profileInput(Context context, String hint, String value) {
+        EditText view = input(context, hint);
+        view.setFilters(new InputFilter[]{new InputFilter.LengthFilter(64)});
+        view.setText(value);
+        view.setSelection(view.length());
+        return view;
     }
 
     private void selectNotificationPrivacy(int privacy) {

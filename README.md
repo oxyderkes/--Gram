@@ -6,7 +6,7 @@
 
 ## Состав репозитория
 
-- [`android/`](android/) — overlay `12.10.1-a-gram.5` для официального Telegram Android.
+- [`android/`](android/) — overlay `12.10.1-a-gram.7` для официального Telegram Android.
 - [`windows/`](windows/) — overlay `7.1.2-a-gram.15` для Telegram Desktop.
 
 В репозитории хранятся только изменённые файлы поверх зафиксированных upstream-коммитов. Базовые репозитории, версии инструментов и порядок сборки указаны в README внутри каждой платформы.

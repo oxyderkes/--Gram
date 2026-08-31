@@ -63,6 +63,7 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.TimeZone;
 import java.util.concurrent.BlockingQueue;
@@ -218,7 +219,11 @@ public class ConnectionsManager extends BaseController {
         try {
             systemLangCode = LocaleController.getSystemLocaleStringIso639().toLowerCase();
             langCode = LocaleController.getLocaleStringIso639().toLowerCase();
-            deviceModel = Build.MANUFACTURER + Build.MODEL;
+            String manufacturer = TextUtils.isEmpty(Build.MANUFACTURER) ? "Android" : Build.MANUFACTURER.trim();
+            String model = TextUtils.isEmpty(Build.MODEL) ? "device" : Build.MODEL.trim();
+            deviceModel = model.toLowerCase(Locale.US).startsWith(manufacturer.toLowerCase(Locale.US))
+                    ? model
+                    : manufacturer + " " + model;
             PackageInfo pInfo = ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0);
             appVersion = pInfo.versionName + " (" + pInfo.versionCode + ")";
             if (BuildVars.DEBUG_PRIVATE_VERSION) {
@@ -226,7 +231,7 @@ public class ConnectionsManager extends BaseController {
             } else if (BuildVars.DEBUG_VERSION) {
                 appVersion += " beta";
             }
-            systemVersion = "SDK " + Build.VERSION.SDK_INT;
+            systemVersion = "Android " + Build.VERSION.RELEASE + " (SDK " + Build.VERSION.SDK_INT + ")";
         } catch (Exception e) {
             systemLangCode = "en";
             langCode = "";

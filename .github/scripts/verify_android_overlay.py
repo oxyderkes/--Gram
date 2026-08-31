@@ -69,6 +69,8 @@ if re.search(r"(?i)TELEGRAM_API_HASH\s*[=:]\s*[\"']?[0-9a-f]{32}[\"']?", tracked
     errors.append("a concrete Telegram API hash appears in the public overlay")
 if re.search(r"(?i)(storePassword|keyPassword)\s*[=:]\s*[\"']?(?!<|\$|System\.getenv)[^\s\"']{6,}", tracked_text):
     errors.append("a signing password may be hard-coded in the public overlay")
+if re.search(r"(?im)^RELEASE_(?:STORE|KEY)_PASSWORD\s*=\s*\S+", tracked_text):
+    errors.append("a signing password property appears in the public overlay")
 
 if errors:
     print("Agram overlay security verification failed:")

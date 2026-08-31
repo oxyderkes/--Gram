@@ -33,6 +33,7 @@ public final class AgramContainerManager {
 
     public static final int PROFILE_COMPATIBLE = 0;
     public static final int PROFILE_MINIMAL = 1;
+    public static final int PROFILE_CUSTOM = 2;
 
     public static final int NOTIFICATION_HIDDEN = 0;
     public static final int NOTIFICATION_AUTHOR = 1;
@@ -90,6 +91,7 @@ public final class AgramContainerManager {
     }
 
     public void updatePreLoginProfile(int account, String name, int color, int profileMode,
+                                      String deviceModel, String systemVersion, String appVersion,
                                       String languageCode, boolean fixedTimezone, int timezoneOffset,
                                       String pin, boolean biometricEnabled, int notificationPrivacy) {
         synchronized (sync) {
@@ -99,7 +101,10 @@ public final class AgramContainerManager {
             }
             record.name = TextUtils.isEmpty(name) ? defaultName(account) : name.trim();
             record.color = color;
-            record.profileMode = profileMode == PROFILE_COMPATIBLE ? PROFILE_COMPATIBLE : PROFILE_MINIMAL;
+            record.profileMode = normalizeProfileMode(profileMode);
+            record.deviceModel = normalizeProfileValue(deviceModel, 64);
+            record.systemVersion = normalizeProfileValue(systemVersion, 64);
+            record.appVersion = normalizeProfileValue(appVersion, 64);
             record.languageCode = normalizeLanguage(languageCode);
             record.fixedTimezone = fixedTimezone;
             record.timezoneOffset = fixedTimezone ? timezoneOffset : systemTimezoneOffset();
@@ -204,6 +209,16 @@ public final class AgramContainerManager {
                     compatibleTimezoneOffset
             );
         }
+        if (record.profileMode == PROFILE_CUSTOM) {
+            return new SessionProfile(
+                    fallbackProfileValue(record.deviceModel, compatibleDeviceModel),
+                    fallbackProfileValue(record.systemVersion, compatibleSystemVersion),
+                    fallbackProfileValue(record.appVersion, appVersion),
+                    normalizeLanguage(record.languageCode),
+                    normalizeLanguage(record.languageCode),
+                    record.fixedTimezone ? record.timezoneOffset : compatibleTimezoneOffset
+            );
+        }
         String language = normalizeLanguage(record.languageCode);
         return new SessionProfile(
                 "Agram Android",
@@ -241,6 +256,9 @@ public final class AgramContainerManager {
         public int color;
         public long createdAt;
         public int profileMode;
+        public String deviceModel;
+        public String systemVersion;
+        public String appVersion;
         public String profileId;
         public long profileGeneratedAt;
         public boolean profileLocked;
@@ -335,6 +353,9 @@ public final class AgramContainerManager {
         record.color = defaultColor(account);
         record.createdAt = System.currentTimeMillis();
         record.profileMode = PROFILE_MINIMAL;
+        record.deviceModel = "";
+        record.systemVersion = "";
+        record.appVersion = "";
         record.profileId = UUID.randomUUID().toString();
         record.profileGeneratedAt = System.currentTimeMillis();
         record.profileLocked = UserConfig.getInstance(account).isClientActivated();
@@ -398,6 +419,9 @@ public final class AgramContainerManager {
         json.put("color", record.color);
         json.put("created_at", record.createdAt);
         json.put("profile_mode", record.profileMode);
+        json.put("device_model", safe(record.deviceModel));
+        json.put("system_version", safe(record.systemVersion));
+        json.put("app_version", safe(record.appVersion));
         json.put("profile_id", record.profileId);
         json.put("profile_generated_at", record.profileGeneratedAt);
         json.put("profile_locked", record.profileLocked);
@@ -429,7 +453,10 @@ public final class AgramContainerManager {
         record.name = json.optString("name", defaultName(record.account));
         record.color = json.optInt("color", defaultColor(record.account));
         record.createdAt = json.optLong("created_at", 0);
-        record.profileMode = json.optInt("profile_mode", PROFILE_MINIMAL);
+        record.profileMode = normalizeProfileMode(json.optInt("profile_mode", PROFILE_MINIMAL));
+        record.deviceModel = normalizeProfileValue(json.optString("device_model", ""), 64);
+        record.systemVersion = normalizeProfileValue(json.optString("system_version", ""), 64);
+        record.appVersion = normalizeProfileValue(json.optString("app_version", ""), 64);
         record.profileId = json.optString("profile_id", UUID.randomUUID().toString());
         record.profileGeneratedAt = json.optLong("profile_generated_at", record.createdAt);
         record.profileLocked = json.optBoolean("profile_locked", false);
@@ -505,6 +532,43 @@ public final class AgramContainerManager {
             return value;
         }
         return NOTIFICATION_HIDDEN;
+    }
+
+    private static int normalizeProfileMode(int value) {
+        if (value == PROFILE_COMPATIBLE || value == PROFILE_CUSTOM) {
+            return value;
+        }
+        return PROFILE_MINIMAL;
+    }
+
+    private static String normalizeProfileValue(String value, int maxLength) {
+        if (TextUtils.isEmpty(value)) {
+            return "";
+        }
+        StringBuilder normalized = new StringBuilder(Math.min(value.length(), maxLength));
+        boolean previousWhitespace = false;
+        for (int i = 0; i < value.length() && normalized.length() < maxLength; i++) {
+            char character = value.charAt(i);
+            if (Character.isISOControl(character)) {
+                continue;
+            }
+            if (Character.isWhitespace(character)) {
+                if (normalized.length() == 0 || previousWhitespace) {
+                    continue;
+                }
+                normalized.append(' ');
+                previousWhitespace = true;
+            } else {
+                normalized.append(character);
+                previousWhitespace = false;
+            }
+        }
+        return normalized.toString().trim();
+    }
+
+    private static String fallbackProfileValue(String value, String fallback) {
+        String normalized = normalizeProfileValue(value, 64);
+        return TextUtils.isEmpty(normalized) ? fallback : normalized;
     }
 
     private static String safe(String value) {
