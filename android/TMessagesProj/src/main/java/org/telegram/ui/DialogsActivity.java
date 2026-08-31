@@ -99,6 +99,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager.widget.ViewPager;
 
 import org.telegram.messenger.AccountInstance;
+import org.telegram.messenger.AgramContainerManager;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.AnimationNotificationsLocker;
 import org.telegram.messenger.ApplicationLoader;
@@ -305,6 +306,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     private static final int ANIMATOR_ID_FORWARD_BUTTON_VISIBLE = 7;
     private static final int ANIMATOR_ID_FILTER_TABS_VISIBLE = 8;
     private static final int ANIMATOR_ID_SEARCH_FILTER_TABS_VISIBLE = 9;
+    private static final int GHOST_MODE_ITEM_ID = -1001;
 
     private final BoolAnimator animatorSearchVisible = new BoolAnimator(ANIMATOR_ID_SEARCH_VISIBLE,
             this, CubicBezierInterpolator.EASE_OUT_QUINT, 350);
@@ -506,6 +508,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     private boolean downloadsItemVisible;
     public ActionBarMenuItem searchItem;
     private ActionBarMenuItem optionsItem;
+    private ActionBarMenuItem ghostModeItem;
     private ActionBarMenuItem speedItem;
     public static boolean switchingTheme;
     private ActionBarMenuItem doneItem;
@@ -3443,6 +3446,16 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             }
         });
         fragmentSearchFieldWatcher.setDoNotCloseAfterFieldEmpty();
+
+        if (initialDialogsType == DIALOGS_TYPE_DEFAULT && !onlySelect && searchString == null && folderId == 0 && communityId == 0) {
+            ghostModeItem = menu.addItem(GHOST_MODE_ITEM_ID, R.drawable.msg_stories_stealth2);
+            ghostModeItem.setOnClickListener(v -> toggleGhostMode());
+            ghostModeItem.setOnLongClickListener(v -> {
+                presentFragment(new AgramContainerSetupActivity(currentAccount));
+                return true;
+            });
+            updateGhostModeHeader();
+        }
 
         if (initialDialogsType == DIALOGS_TYPE_DEFAULT) {
             optionsItem = menu.addItem(4, R.drawable.ic_ab_other);
@@ -7022,9 +7035,38 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         }
     }
 
+    private void toggleGhostMode() {
+        AgramContainerManager manager = AgramContainerManager.getInstance();
+        boolean enabled = !manager.isGhostModeEnabled(currentAccount);
+        manager.setGhostModeEnabled(currentAccount, enabled);
+        updateGhostModeHeader();
+        BulletinFactory.of(this).createSimpleBulletin(
+                R.raw.chats_infotip,
+                enabled ? "Секретный режим включён" : "Секретный режим выключен",
+                enabled
+                        ? "Best effort · настройки применены к текущему контейнеру"
+                        : "Обычная отправка статусов активности восстановлена"
+        ).show();
+    }
+
+    private void updateGhostModeHeader() {
+        if (ghostModeItem == null) {
+            return;
+        }
+        boolean enabled = AgramContainerManager.getInstance().isGhostModeEnabled(currentAccount);
+        ghostModeItem.setIconColor(getThemedColor(enabled
+                ? Theme.key_windowBackgroundWhiteBlueText
+                : Theme.key_actionBarDefaultIcon));
+        ghostModeItem.setAlpha(enabled ? 1f : .58f);
+        ghostModeItem.setContentDescription(enabled
+                ? "Секретный режим включён. Нажмите, чтобы выключить"
+                : "Секретный режим выключен. Нажмите, чтобы включить");
+    }
+
     @Override
     public void onResume() {
         super.onResume();
+        updateGhostModeHeader();
         if (dialogStoriesCell != null) {
             dialogStoriesCell.onResume();
         }
@@ -12042,6 +12084,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 actionBar.setPopupItemsColor(getThemedColor(Theme.key_actionBarDefaultSubmenuItemIcon), true, true);
                 actionBar.setPopupItemsSelectorColor(getThemedColor(Theme.key_dialogButtonSelector), true);
                 actionBar.updateColors();
+                updateGhostModeHeader();
             }
             if (statusDrawable != null) {
                 updateStatus(UserConfig.getInstance(currentAccount).getCurrentUser(), false);

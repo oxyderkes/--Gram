@@ -57,7 +57,6 @@ public class AgramContainerSetupActivity extends BaseFragment {
     private EditText appVersionField;
     private TextView detectProfileButton;
     private Switch biometricSwitch;
-    private Switch ghostModeSwitch;
     private Switch ghostReadSwitch;
     private Switch ghostStoriesSwitch;
     private Switch ghostTypingSwitch;
@@ -221,31 +220,28 @@ public class AgramContainerSetupActivity extends BaseFragment {
 
         LinearLayout ghostCard = card(context);
         content.addView(ghostCard, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
-        ghostCard.addView(sectionLabel(context, "GHOST MODE · BEST EFFORT"));
-        ghostModeSwitch = settingSwitch(context, "Включить Ghost Mode", record.ghostModeEnabled);
+        ghostCard.addView(sectionLabel(context, "ПАРАМЕТРЫ СЕКРЕТНОГО РЕЖИМА · BEST EFFORT"));
         ghostReadSwitch = settingSwitch(context, "Не отправлять отметку о прочтении", record.ghostSuppressReadReceipts);
         ghostStoriesSwitch = settingSwitch(context, "Не показывать просмотр историй", record.ghostSuppressStoryViews);
         ghostTypingSwitch = settingSwitch(context, "Не отправлять typing / recording", record.ghostSuppressTyping);
         ghostOnlineSwitch = settingSwitch(context, "Минимизировать online", record.ghostMinimizeOnline);
         ghostReadOnInteractionSwitch = settingSwitch(context, "Прочитать при взаимодействии", record.ghostReadOnInteraction);
         ghostWarnSwitch = settingSwitch(context, "Предупреждать перед реакцией или ответом", record.ghostWarnBeforeInteraction);
-        ghostCard.addView(ghostModeSwitch);
         ghostCard.addView(ghostReadSwitch);
         ghostCard.addView(ghostStoriesSwitch);
         ghostCard.addView(ghostTypingSwitch);
         ghostCard.addView(ghostOnlineSwitch);
         ghostCard.addView(ghostReadOnInteractionSwitch);
         ghostCard.addView(ghostWarnSwitch);
-        ghostModeSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> setGhostControlsEnabled(isChecked));
         ghostReadSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            ghostReadOnInteractionSwitch.setEnabled(ghostModeSwitch.isChecked() && isChecked);
+            ghostReadOnInteractionSwitch.setEnabled(isChecked);
             ghostReadOnInteractionSwitch.setAlpha(ghostReadOnInteractionSwitch.isEnabled() ? 1f : .5f);
         });
-        setGhostControlsEnabled(ghostModeSwitch.isChecked());
+        updateGhostControlsEnabled();
 
         TextView ghostNote = text(
                 context,
-                "Best effort: клиент подавляет известные запросы активности, но отправка сообщения, реакция, звонок и другие серверные действия всё равно могут раскрыть присутствие.",
+                "Главный переключатель находится в шапке списка диалогов. Best effort: клиент подавляет известные запросы активности, но отправка сообщения, реакция, звонок и другие серверные действия всё равно могут раскрыть присутствие.",
                 12,
                 Theme.key_windowBackgroundWhiteGrayText,
                 false
@@ -567,7 +563,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
     private void saveGhostMode() {
         AgramContainerManager.getInstance().updateGhostMode(
                 account,
-                ghostModeSwitch.isChecked(),
+                AgramContainerManager.getInstance().isGhostModeEnabled(account),
                 ghostReadSwitch.isChecked(),
                 ghostStoriesSwitch.isChecked(),
                 ghostTypingSwitch.isChecked(),
@@ -577,20 +573,10 @@ public class AgramContainerSetupActivity extends BaseFragment {
         );
     }
 
-    private void setGhostControlsEnabled(boolean enabled) {
-        Switch[] controls = {
-                ghostReadSwitch,
-                ghostStoriesSwitch,
-                ghostTypingSwitch,
-                ghostOnlineSwitch,
-                ghostReadOnInteractionSwitch,
-                ghostWarnSwitch
-        };
-        for (Switch control : controls) {
-            boolean controlEnabled = enabled && (control != ghostReadOnInteractionSwitch || ghostReadSwitch.isChecked());
-            control.setEnabled(controlEnabled);
-            control.setAlpha(controlEnabled ? 1f : .5f);
-        }
+    private void updateGhostControlsEnabled() {
+        boolean readOnInteractionEnabled = ghostReadSwitch.isChecked();
+        ghostReadOnInteractionSwitch.setEnabled(readOnInteractionEnabled);
+        ghostReadOnInteractionSwitch.setAlpha(readOnInteractionEnabled ? 1f : .5f);
     }
 
     private int selectedNotificationPrivacy() {

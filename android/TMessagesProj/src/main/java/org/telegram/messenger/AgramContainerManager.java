@@ -210,6 +210,22 @@ public final class AgramContainerManager {
         }
     }
 
+    public boolean isGhostModeEnabled(int account) {
+        return ensureContainer(account).ghostModeEnabled;
+    }
+
+    public void setGhostModeEnabled(int account, boolean enabled) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            if (record.ghostModeEnabled == enabled) {
+                return;
+            }
+            record.ghostModeEnabled = enabled;
+            allowReadReceiptOnce[account] = false;
+            saveRecord(record);
+        }
+    }
+
     public boolean shouldSuppressTyping(int account) {
         ContainerRecord record = ensureContainer(account);
         return record.ghostModeEnabled && record.ghostSuppressTyping;
