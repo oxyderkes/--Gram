@@ -135,6 +135,7 @@ import com.google.zxing.common.detector.MathUtils;
 
 import org.telegram.PhoneFormat.PhoneFormat;
 import org.telegram.messenger.AccountInstance;
+import org.telegram.messenger.AgramContainerManager;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.BotForumHelper;
@@ -1986,6 +1987,7 @@ public class ChatActivity extends BaseFragment implements
 
         @Override
         public void onMessageSend(CharSequence message, boolean notify, int scheduleDate, int scheduleRepeatPeriod, long payStars) {
+            markReadForGhostInteraction();
             if (chatListItemAnimator != null) {
                 chatActivityEnterViewAnimateFromTop = chatActivityEnterView.getBackgroundTop();
                 if (chatActivityEnterViewAnimateFromTop != 0) {
@@ -14686,11 +14688,37 @@ public class ChatActivity extends BaseFragment implements
     }
 
     public void showFieldPanelForReply(MessageObject messageObjectToReply) {
+        if (shouldWarnBeforeGhostInteraction() && !ghostReplyWarningAccepted) {
+            showGhostInteractionWarning(
+                    "Ответ будет отправлен на сервер и может раскрыть вашу активность. Продолжить?",
+                    () -> {
+                        ghostReplyWarningAccepted = true;
+                        try {
+                            showFieldPanelForReply(messageObjectToReply);
+                        } finally {
+                            ghostReplyWarningAccepted = false;
+                        }
+                    });
+            return;
+        }
         showFieldPanel(true, messageObjectToReply, null, null, null, true, 0, null, false, 0, true);
     }
 
     private Runnable onHideFieldPanelRunnable;
     public void showFieldPanelForReplyQuote(MessageObject messageObjectToReply, ReplyQuote quote) {
+        if (shouldWarnBeforeGhostInteraction() && !ghostReplyWarningAccepted) {
+            showGhostInteractionWarning(
+                    "Ответ с цитатой будет отправлен на сервер и может раскрыть вашу активность. Продолжить?",
+                    () -> {
+                        ghostReplyWarningAccepted = true;
+                        try {
+                            showFieldPanelForReplyQuote(messageObjectToReply, quote);
+                        } finally {
+                            ghostReplyWarningAccepted = false;
+                        }
+                    });
+            return;
+        }
         showFieldPanel(true, messageObjectToReply, null, null, null, true, 0, quote, false, 0, true);
     }
 
@@ -32797,6 +32825,70 @@ public class ChatActivity extends BaseFragment implements
     }
 
     Runnable updateReactionRunnable;
+    private boolean ghostReplyWarningAccepted;
+    private boolean ghostReactionWarningAccepted;
+
+    private boolean shouldWarnBeforeGhostInteraction() {
+        return !isPaused
+                && openAnimationEnded
+                && getParentActivity() != null
+                && AgramContainerManager.getInstance().shouldWarnBeforeInteraction(currentAccount);
+    }
+
+    private void showGhostInteractionWarning(String message, Runnable onContinue) {
+        if (getParentActivity() == null) {
+            onContinue.run();
+            return;
+        }
+        new AlertDialog.Builder(getParentActivity(), themeDelegate)
+                .setTitle("Ghost Mode · best effort")
+                .setMessage(message)
+                .setNegativeButton(LocaleController.getString(R.string.Cancel), null)
+                .setPositiveButton("Продолжить", (dialog, which) -> onContinue.run())
+                .show();
+    }
+
+    private void markReadForGhostInteraction() {
+        AgramContainerManager manager = AgramContainerManager.getInstance();
+        if (!manager.isReadOnInteractionEnabled(currentAccount) || DialogObject.isEncryptedDialog(dialog_id)) {
+            return;
+        }
+        manager.allowReadReceiptForInteraction(currentAccount);
+        int maxPositiveId = Integer.MIN_VALUE;
+        int maxNegativeId = Integer.MAX_VALUE;
+        int maxDate = Integer.MIN_VALUE;
+        if (messages != null) {
+            for (int i = 0; i < messages.size(); i++) {
+                MessageObject message = messages.get(i);
+                if (message == null || message.isOut() || !message.isUnread()) {
+                    continue;
+                }
+                int id = message.getId();
+                if (id > 0) {
+                    maxPositiveId = Math.max(maxPositiveId, id);
+                } else if (id < 0) {
+                    maxNegativeId = Math.min(maxNegativeId, id);
+                }
+                if (message.messageOwner != null) {
+                    maxDate = Math.max(maxDate, message.messageOwner.date);
+                }
+            }
+        }
+        if (maxPositiveId != Integer.MIN_VALUE || maxNegativeId != Integer.MAX_VALUE) {
+            getMessagesController().markDialogAsRead(
+                    dialog_id,
+                    maxPositiveId,
+                    maxNegativeId,
+                    maxDate,
+                    false,
+                    getTopicId(),
+                    0,
+                    true,
+                    0);
+        } else {
+            getMessagesController().markDialogAsReadNow(dialog_id, getTopicId());
+        }
+    }
 
     private void showMultipleReactionsPromo(View cell, ReactionsLayoutInBubble.VisibleReaction visibleReaction, int currentChosenReactions) {
         if (SharedConfig.multipleReactionsPromoShowed || cell == null || visibleReaction == null || getUserConfig().isPremium()) {
@@ -32828,6 +32920,21 @@ public class ChatActivity extends BaseFragment implements
         if (isInScheduleMode() || primaryMessage == null) {
             return;
         }
+        if (shouldWarnBeforeGhostInteraction() && !ghostReactionWarningAccepted) {
+            final View reactionCell = cell;
+            showGhostInteractionWarning(
+                    "Реакция будет отправлена на сервер и может раскрыть вашу активность. Продолжить?",
+                    () -> {
+                        ghostReactionWarningAccepted = true;
+                        try {
+                            selectReaction(reactionCell, primaryMessage, reactionsLayout, fromView, x, y, visibleReaction, fromDoubleTap, bigEmoji, addToRecent, withoutAnimation);
+                        } finally {
+                            ghostReactionWarningAccepted = false;
+                        }
+                    });
+            return;
+        }
+        markReadForGhostInteraction();
         if (getMessagesController().isFrozen()) {
             AccountFrozenAlert.show(currentAccount);
             return;

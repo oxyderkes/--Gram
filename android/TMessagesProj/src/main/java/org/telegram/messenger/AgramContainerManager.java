@@ -8,14 +8,18 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import android.text.TextUtils;
 import android.util.Base64;
+import android.util.SparseArray;
 
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.UUID;
@@ -39,6 +43,9 @@ public final class AgramContainerManager {
     public static final int NOTIFICATION_AUTHOR = 1;
     public static final int NOTIFICATION_FULL = 2;
 
+    public static final int PIN_RESULT_INVALID = -2;
+    public static final int PIN_RESULT_REAL = -1;
+
     private static final String REGISTRY = "agram_container_registry";
     private static final String SLOT_PREFIX = "slot_";
     private static final String METADATA_PREFIX = "metadata_";
@@ -50,6 +57,8 @@ public final class AgramContainerManager {
     private final SharedPreferences preferences;
     private final SecureRandom secureRandom = new SecureRandom();
     private final Object sync = new Object();
+    private final SparseArray<ContainerRecord> recordCache = new SparseArray<>();
+    private final boolean[] allowReadReceiptOnce = new boolean[UserConfig.MAX_ACCOUNT_COUNT];
 
     public static AgramContainerManager getInstance() {
         AgramContainerManager local = instance;
@@ -70,10 +79,15 @@ public final class AgramContainerManager {
 
     public ContainerRecord ensureContainer(int account) {
         synchronized (sync) {
+            ContainerRecord cached = recordCache.get(account);
+            if (cached != null) {
+                return cached;
+            }
             String id = preferences.getString(SLOT_PREFIX + account, null);
             if (!TextUtils.isEmpty(id)) {
                 ContainerRecord record = readRecord(account, id);
                 if (record != null) {
+                    recordCache.put(account, record);
                     return record;
                 }
             }
@@ -85,8 +99,16 @@ public final class AgramContainerManager {
 
     public ContainerRecord getContainer(int account) {
         synchronized (sync) {
+            ContainerRecord cached = recordCache.get(account);
+            if (cached != null) {
+                return cached;
+            }
             String id = preferences.getString(SLOT_PREFIX + account, null);
-            return TextUtils.isEmpty(id) ? null : readRecord(account, id);
+            ContainerRecord record = TextUtils.isEmpty(id) ? null : readRecord(account, id);
+            if (record != null) {
+                recordCache.put(account, record);
+            }
+            return record;
         }
     }
 
@@ -150,6 +172,74 @@ public final class AgramContainerManager {
         }
     }
 
+    /**
+     * Resolves a code without exposing whether it is the real code or a local
+     * legend code. A non-negative result is the account container selected as
+     * the safe legend.
+     */
+    public int resolvePinTarget(int account, String pin) {
+        ContainerRecord record = getContainer(account);
+        if (record == null) {
+            return PIN_RESULT_INVALID;
+        }
+        if (verifyHash(pin, record.pinSalt, record.pinHash)) {
+            return PIN_RESULT_REAL;
+        }
+        for (int i = 0; i < record.decoyCodes.size(); i++) {
+            DecoyCode code = record.decoyCodes.get(i);
+            if (verifyHash(pin, code.pinSalt, code.pinHash)) {
+                return code.targetAccount;
+            }
+        }
+        return PIN_RESULT_INVALID;
+    }
+
+    public void updateDecoyCodes(int account, String[] pins, int[] targetAccounts, boolean clearExisting) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            if (!record.hasPin() && pins != null && pins.length > 0) {
+                throw new IllegalArgumentException("A real PIN is required before legend PINs can be configured");
+            }
+            if (clearExisting) {
+                record.decoyCodes.clear();
+            }
+            if (pins != null && targetAccounts != null && pins.length == targetAccounts.length && pins.length > 0) {
+                ArrayList<DecoyCode> replacements = new ArrayList<>();
+                HashSet<Integer> targets = new HashSet<>();
+                HashSet<String> uniquePins = new HashSet<>();
+                for (int i = 0; i < pins.length && i < 3; i++) {
+                    String pin = pins[i];
+                    int target = targetAccounts[i];
+                    if (TextUtils.isEmpty(pin)) {
+                        continue;
+                    }
+                    if (pin.length() < 6 || verifyHash(pin, record.pinSalt, record.pinHash)) {
+                        throw new IllegalArgumentException("Legend PIN must differ from the real PIN and contain at least 6 characters");
+                    }
+                    if (!uniquePins.add(pin)) {
+                        throw new IllegalArgumentException("Legend PINs must be unique");
+                    }
+                    if (target < 0 || target >= UserConfig.MAX_ACCOUNT_COUNT || target == account
+                            || !UserConfig.isValidAccount(target) || !UserConfig.getInstance(target).isClientActivated()) {
+                        throw new IllegalArgumentException("Legend target must be another active account");
+                    }
+                    if (!targets.add(target)) {
+                        throw new IllegalArgumentException("Each legend must use a different account");
+                    }
+                    DecoyCode code = new DecoyCode();
+                    code.targetAccount = target;
+                    setDecoyPin(code, pin);
+                    replacements.add(code);
+                }
+                if (!replacements.isEmpty()) {
+                    record.decoyCodes.clear();
+                    record.decoyCodes.addAll(replacements);
+                }
+            }
+            saveRecord(record);
+        }
+    }
+
     public void setNotificationPrivacy(int account, int notificationPrivacy) {
         synchronized (sync) {
             ContainerRecord record = ensureContainer(account);
@@ -172,6 +262,73 @@ public final class AgramContainerManager {
         }
     }
 
+    public void updateGhostMode(int account, boolean enabled, boolean suppressReadReceipts,
+                                boolean suppressStoryViews, boolean suppressTyping,
+                                boolean minimizeOnline, boolean readOnInteraction,
+                                boolean warnBeforeInteraction) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            record.ghostModeEnabled = enabled;
+            record.ghostSuppressReadReceipts = suppressReadReceipts;
+            record.ghostSuppressStoryViews = suppressStoryViews;
+            record.ghostSuppressTyping = suppressTyping;
+            record.ghostMinimizeOnline = minimizeOnline;
+            record.ghostReadOnInteraction = readOnInteraction;
+            record.ghostWarnBeforeInteraction = warnBeforeInteraction;
+            allowReadReceiptOnce[account] = false;
+            saveRecord(record);
+        }
+    }
+
+    public boolean shouldSuppressTyping(int account) {
+        ContainerRecord record = ensureContainer(account);
+        return record.ghostModeEnabled && record.ghostSuppressTyping;
+    }
+
+    public boolean shouldSuppressStoryViews(int account) {
+        ContainerRecord record = ensureContainer(account);
+        return record.ghostModeEnabled && record.ghostSuppressStoryViews;
+    }
+
+    public boolean shouldMinimizeOnline(int account) {
+        ContainerRecord record = ensureContainer(account);
+        return record.ghostModeEnabled && record.ghostMinimizeOnline;
+    }
+
+    public boolean shouldWarnBeforeInteraction(int account) {
+        ContainerRecord record = ensureContainer(account);
+        return record.ghostModeEnabled && record.ghostWarnBeforeInteraction;
+    }
+
+    public boolean isReadOnInteractionEnabled(int account) {
+        ContainerRecord record = ensureContainer(account);
+        return record.ghostModeEnabled && record.ghostSuppressReadReceipts && record.ghostReadOnInteraction;
+    }
+
+    public void allowReadReceiptForInteraction(int account) {
+        if (account < 0 || account >= allowReadReceiptOnce.length || !isReadOnInteractionEnabled(account)) {
+            return;
+        }
+        synchronized (sync) {
+            allowReadReceiptOnce[account] = true;
+        }
+    }
+
+    public boolean shouldSuppressReadReceipt(int account) {
+        ContainerRecord record = ensureContainer(account);
+        if (!record.ghostModeEnabled || !record.ghostSuppressReadReceipts) {
+            return false;
+        }
+        synchronized (sync) {
+            if (record.ghostReadOnInteraction && account >= 0 && account < allowReadReceiptOnce.length
+                    && allowReadReceiptOnce[account]) {
+                allowReadReceiptOnce[account] = false;
+                return false;
+            }
+        }
+        return true;
+    }
+
     public void deleteContainer(int account) {
         synchronized (sync) {
             String id = preferences.getString(SLOT_PREFIX + account, null);
@@ -185,6 +342,10 @@ public final class AgramContainerManager {
                     .remove(SLOT_PREFIX + account)
                     .remove(METADATA_PREFIX + id)
                     .commit();
+            recordCache.remove(account);
+            if (account >= 0 && account < allowReadReceiptOnce.length) {
+                allowReadReceiptOnce[account] = false;
+            }
             Utilities.globalQueue.postRunnable(() -> deleteRecursively(getContainerDirectory(id)));
         }
     }
@@ -277,10 +438,24 @@ public final class AgramContainerManager {
         public String pinSalt;
         public String pinHash;
         public boolean biometricEnabled;
+        public boolean ghostModeEnabled;
+        public boolean ghostSuppressReadReceipts;
+        public boolean ghostSuppressStoryViews;
+        public boolean ghostSuppressTyping;
+        public boolean ghostMinimizeOnline;
+        public boolean ghostReadOnInteraction;
+        public boolean ghostWarnBeforeInteraction;
+        public final ArrayList<DecoyCode> decoyCodes = new ArrayList<>();
 
         public boolean hasPin() {
             return !TextUtils.isEmpty(pinHash) && !TextUtils.isEmpty(pinSalt);
         }
+    }
+
+    public static final class DecoyCode {
+        public int targetAccount;
+        public String pinSalt;
+        public String pinHash;
     }
 
     public void saveProxySettings(int account, boolean enabled, String address, int port,
@@ -371,6 +546,13 @@ public final class AgramContainerManager {
         record.proxyMode = record.proxyEnabled ? "custom" : "direct";
         record.pushMode = "none";
         record.notificationPrivacy = NOTIFICATION_HIDDEN;
+        record.ghostModeEnabled = false;
+        record.ghostSuppressReadReceipts = true;
+        record.ghostSuppressStoryViews = true;
+        record.ghostSuppressTyping = true;
+        record.ghostMinimizeOnline = true;
+        record.ghostReadOnInteraction = true;
+        record.ghostWarnBeforeInteraction = true;
         File directory = getContainerDirectory(record.id);
         if (!directory.exists() && !directory.mkdirs()) {
             FileLog.e("Unable to create Agram container directory " + directory);
@@ -386,6 +568,7 @@ public final class AgramContainerManager {
                     .putString(SLOT_PREFIX + record.account, record.id)
                     .putString(METADATA_PREFIX + record.id, Base64.encodeToString(encrypted, Base64.NO_WRAP))
                     .commit();
+            recordCache.put(record.account, record);
         } catch (Exception e) {
             throw new IllegalStateException("Unable to persist Agram container", e);
         }
@@ -440,6 +623,23 @@ public final class AgramContainerManager {
         json.put("pin_salt", record.pinSalt);
         json.put("pin_hash", record.pinHash);
         json.put("biometric", record.biometricEnabled);
+        json.put("ghost_enabled", record.ghostModeEnabled);
+        json.put("ghost_read", record.ghostSuppressReadReceipts);
+        json.put("ghost_stories", record.ghostSuppressStoryViews);
+        json.put("ghost_typing", record.ghostSuppressTyping);
+        json.put("ghost_online", record.ghostMinimizeOnline);
+        json.put("ghost_read_on_interaction", record.ghostReadOnInteraction);
+        json.put("ghost_warn_interaction", record.ghostWarnBeforeInteraction);
+        JSONArray decoys = new JSONArray();
+        for (int i = 0; i < record.decoyCodes.size(); i++) {
+            DecoyCode code = record.decoyCodes.get(i);
+            JSONObject value = new JSONObject();
+            value.put("target_account", code.targetAccount);
+            value.put("pin_salt", code.pinSalt);
+            value.put("pin_hash", code.pinHash);
+            decoys.put(value);
+        }
+        json.put("decoy_codes", decoys);
         return json;
     }
 
@@ -475,6 +675,29 @@ public final class AgramContainerManager {
         record.pinSalt = nullable(json, "pin_salt");
         record.pinHash = nullable(json, "pin_hash");
         record.biometricEnabled = json.optBoolean("biometric", false);
+        record.ghostModeEnabled = json.optBoolean("ghost_enabled", false);
+        record.ghostSuppressReadReceipts = json.optBoolean("ghost_read", true);
+        record.ghostSuppressStoryViews = json.optBoolean("ghost_stories", true);
+        record.ghostSuppressTyping = json.optBoolean("ghost_typing", true);
+        record.ghostMinimizeOnline = json.optBoolean("ghost_online", true);
+        record.ghostReadOnInteraction = json.optBoolean("ghost_read_on_interaction", true);
+        record.ghostWarnBeforeInteraction = json.optBoolean("ghost_warn_interaction", true);
+        JSONArray decoys = json.optJSONArray("decoy_codes");
+        if (decoys != null) {
+            for (int i = 0; i < decoys.length() && i < 3; i++) {
+                JSONObject value = decoys.optJSONObject(i);
+                if (value == null) {
+                    continue;
+                }
+                DecoyCode code = new DecoyCode();
+                code.targetAccount = value.optInt("target_account", -1);
+                code.pinSalt = nullable(value, "pin_salt");
+                code.pinHash = nullable(value, "pin_hash");
+                if (code.targetAccount >= 0 && !TextUtils.isEmpty(code.pinSalt) && !TextUtils.isEmpty(code.pinHash)) {
+                    record.decoyCodes.add(code);
+                }
+            }
+        }
         return record;
     }
 
@@ -489,6 +712,36 @@ public final class AgramContainerManager {
             record.pinHash = Base64.encodeToString(derivePin(pin, salt), Base64.NO_WRAP);
         } catch (Exception e) {
             throw new IllegalStateException("Unable to protect container PIN", e);
+        }
+    }
+
+    private void setDecoyPin(DecoyCode code, String pin) {
+        try {
+            byte[] salt = new byte[16];
+            secureRandom.nextBytes(salt);
+            code.pinSalt = Base64.encodeToString(salt, Base64.NO_WRAP);
+            code.pinHash = Base64.encodeToString(derivePin(pin, salt), Base64.NO_WRAP);
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to protect legend PIN", e);
+        }
+    }
+
+    private static boolean verifyHash(String pin, String encodedSalt, String encodedHash) {
+        if (TextUtils.isEmpty(pin) || TextUtils.isEmpty(encodedSalt) || TextUtils.isEmpty(encodedHash)) {
+            return false;
+        }
+        try {
+            byte[] salt = Base64.decode(encodedSalt, Base64.NO_WRAP);
+            byte[] expected = Base64.decode(encodedHash, Base64.NO_WRAP);
+            byte[] actual = derivePin(pin, salt);
+            int diff = expected.length ^ actual.length;
+            for (int i = 0; i < Math.min(expected.length, actual.length); i++) {
+                diff |= expected[i] ^ actual[i];
+            }
+            return diff == 0;
+        } catch (Exception e) {
+            FileLog.e("Unable to verify protected PIN", e);
+            return false;
         }
     }
 

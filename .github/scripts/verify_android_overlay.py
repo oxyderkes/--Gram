@@ -21,6 +21,12 @@ standalone_gradle = read("TMessagesProj_AppStandalone/build.gradle")
 main_manifest = read("TMessagesProj/src/main/AndroidManifest.xml")
 standalone_manifest = read("TMessagesProj/config/release/AndroidManifest_standalone.xml")
 message_object = read("TMessagesProj/src/main/java/org/telegram/messenger/MessageObject.java")
+container_manager = read("TMessagesProj/src/main/java/org/telegram/messenger/AgramContainerManager.java")
+container_setup = read("TMessagesProj/src/main/java/org/telegram/ui/AgramContainerSetupActivity.java")
+messages_controller = read("TMessagesProj/src/main/java/org/telegram/messenger/MessagesController.java")
+stories_controller = read("TMessagesProj/src/main/java/org/telegram/ui/Stories/StoriesController.java")
+chat_activity = read("TMessagesProj/src/main/java/org/telegram/ui/ChatActivity.java")
+launch_activity = read("TMessagesProj/src/main/java/org/telegram/ui/LaunchActivity.java")
 
 for label, source in (("core", core_gradle), ("standalone", standalone_gradle)):
     if not re.search(r"minSdkVersion\s+26\b", source):
@@ -59,6 +65,30 @@ required_retention_guards = (
 for guard in required_retention_guards:
     if guard not in message_object:
         errors.append(f"ordinary-message retention safety guard is missing: {guard}")
+
+required_ghost_hooks = (
+    (messages_controller, "shouldSuppressTyping(currentAccount)"),
+    (messages_controller, "shouldSuppressReadReceipt(currentAccount)"),
+    (messages_controller, "shouldMinimizeOnline(currentAccount)"),
+    (stories_controller, "shouldSuppressStoryViews(currentAccount)"),
+    (chat_activity, "markReadForGhostInteraction()"),
+    (chat_activity, "Ghost Mode · best effort"),
+    (container_setup, "GHOST MODE · BEST EFFORT"),
+)
+for source, hook in required_ghost_hooks:
+    if hook not in source:
+        errors.append(f"Ghost Mode hook is missing: {hook}")
+
+required_legend_guards = (
+    "pins.length && i < 3",
+    "Legend target must be another active account",
+    "verifyHash(pin, record.pinSalt, record.pinHash)",
+)
+for guard in required_legend_guards:
+    if guard not in container_manager:
+        errors.append(f"legend-code guard is missing: {guard}")
+if "resolvePinTarget(account" not in launch_activity:
+    errors.append("container unlock does not resolve local legend codes")
 
 tracked_text = "\n".join(
     path.read_text(encoding="utf-8", errors="ignore")

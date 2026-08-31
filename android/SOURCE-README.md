@@ -1,6 +1,6 @@
 # ά‑Gram source overlay
 
-This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.7` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
+This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.8` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
 
 ## Base source
 
@@ -43,7 +43,8 @@ The resulting APK is under `TMessagesProj_AppStandalone/build/outputs/apk/afat/s
 - One named local container per Telegram engine account. Existing installations keep their slot and package identity so sessions can migrate in place; no account shares another account's auth state, database, media namespace, account settings or container key.
 - Encrypted container metadata with a random container ID and a distinct AES-256-GCM key generated in Android Keystore. Local cards for revoked accounts are encrypted with the same container boundary.
 - Offline container creation before Telegram authorization, including an exact preview of the session profile. Choose a minimal profile, truthful auto-detection, or a manually entered fixed device/system/client label. Manual fields are encrypted with the container, validated to 64 printable characters and locked after successful login; automatic random rotation is intentionally not implemented.
-- Optional per-container PIN and biometric gate on account switching.
+- Optional per-container PIN and biometric gate on account switching. Up to three locally hashed legend codes may open another already-authorized container without revealing the protected container name on the code prompt. Legend codes never trigger deletion, logout, remote session changes or hidden messages.
+- Per-container Ghost Mode is explicitly best effort: separate controls suppress known read-receipt, story-view, typing/recording and online-presence requests; read-on-interaction can release a single read update, and replies/reactions can require confirmation because server-side interactions may still reveal activity.
 - Per-container proxy source of truth and native proxy application; Telegram's legacy proxy screen receives only the selected container's projection.
 - Per-container notification privacy: hide identity, show author only, or use full Telegram previews. The secure default is hidden.
 - 32 stable Java/native engine slots and removal of the Premium account-count gate. Containers provide isolation and lifecycle management over those bounded engine instances; they do not turn the native engine into an unbounded process pool.

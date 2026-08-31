@@ -1199,13 +1199,17 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         if (switchingAccount || account == UserConfig.selectedAccount || !UserConfig.isValidAccount(account)) {
             return;
         }
-        unlockContainerThen(account, () -> performSwitchToAccount(account, removeAll, dialogsActivityProvider));
+        unlockContainerThen(account, unlockedAccount -> performSwitchToAccount(unlockedAccount, removeAll, dialogsActivityProvider));
     }
 
-    private void unlockContainerThen(int account, Runnable onUnlocked) {
+    private interface ContainerUnlockCallback {
+        void onUnlocked(int account);
+    }
+
+    private void unlockContainerThen(int account, ContainerUnlockCallback onUnlocked) {
         AgramContainerManager.ContainerRecord record = AgramContainerManager.getInstance().ensureContainer(account);
         if (!record.hasPin() && !record.biometricEnabled) {
-            onUnlocked.run();
+            onUnlocked.onUnlocked(account);
             return;
         }
         if (record.biometricEnabled && BiometricManager.from(this).canAuthenticate(
@@ -1214,7 +1218,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             BiometricPrompt prompt = new BiometricPrompt(this, executor, new BiometricPrompt.AuthenticationCallback() {
                 @Override
                 public void onAuthenticationSucceeded(@NonNull BiometricPrompt.AuthenticationResult result) {
-                    onUnlocked.run();
+                    onUnlocked.onUnlocked(account);
                 }
 
                 @Override
@@ -1237,7 +1241,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         }
     }
 
-    private void showContainerPinDialog(int account, AgramContainerManager.ContainerRecord record, Runnable onUnlocked) {
+    private void showContainerPinDialog(int account, AgramContainerManager.ContainerRecord record, ContainerUnlockCallback onUnlocked) {
         EditText input = new EditText(this);
         input.setSingleLine(true);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -1245,13 +1249,18 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         int padding = dp(24);
         input.setPadding(padding, dp(8), padding, dp(8));
         new AlertDialog.Builder(this)
-                .setTitle(record.name)
-                .setMessage("Введите PIN изолированного контейнера")
+                .setTitle(record.decoyCodes.isEmpty() ? record.name : "ά-Gram")
+                .setMessage(record.decoyCodes.isEmpty() ? "Введите PIN изолированного контейнера" : "Введите код доступа")
                 .setView(input)
                 .setNegativeButton(LocaleController.getString(R.string.Cancel), null)
                 .setPositiveButton(LocaleController.getString(R.string.OK), (dialog, which) -> {
-                    if (AgramContainerManager.getInstance().verifyPin(account, input.getText().toString())) {
-                        onUnlocked.run();
+                    int target = AgramContainerManager.getInstance().resolvePinTarget(account, input.getText().toString());
+                    if (target == AgramContainerManager.PIN_RESULT_REAL) {
+                        onUnlocked.onUnlocked(account);
+                    } else if (target >= 0 && target < UserConfig.MAX_ACCOUNT_COUNT
+                            && UserConfig.isValidAccount(target)
+                            && UserConfig.getInstance(target).isClientActivated()) {
+                        onUnlocked.onUnlocked(target);
                     } else {
                         Toast.makeText(this, "Неверный PIN", Toast.LENGTH_SHORT).show();
                     }

@@ -56,6 +56,16 @@ public class AgramContainerSetupActivity extends BaseFragment {
     private EditText appVersionField;
     private TextView detectProfileButton;
     private Switch biometricSwitch;
+    private Switch ghostModeSwitch;
+    private Switch ghostReadSwitch;
+    private Switch ghostStoriesSwitch;
+    private Switch ghostTypingSwitch;
+    private Switch ghostOnlineSwitch;
+    private Switch ghostReadOnInteractionSwitch;
+    private Switch ghostWarnSwitch;
+    private final EditText[] decoyPinFields = new EditText[3];
+    private final EditText[] decoyTargetFields = new EditText[3];
+    private Switch clearDecoyCodesSwitch;
     private RadioButton hiddenNotifications;
     private RadioButton authorNotifications;
     private RadioButton fullNotifications;
@@ -197,6 +207,40 @@ public class AgramContainerSetupActivity extends BaseFragment {
         preview.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(12), AndroidUtilities.dp(14), AndroidUtilities.dp(12));
         profileCard.addView(preview, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 10, 0, 0));
 
+        LinearLayout ghostCard = card(context);
+        content.addView(ghostCard, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
+        ghostCard.addView(sectionLabel(context, "GHOST MODE · BEST EFFORT"));
+        ghostModeSwitch = settingSwitch(context, "Включить Ghost Mode", record.ghostModeEnabled);
+        ghostReadSwitch = settingSwitch(context, "Не отправлять отметку о прочтении", record.ghostSuppressReadReceipts);
+        ghostStoriesSwitch = settingSwitch(context, "Не показывать просмотр историй", record.ghostSuppressStoryViews);
+        ghostTypingSwitch = settingSwitch(context, "Не отправлять typing / recording", record.ghostSuppressTyping);
+        ghostOnlineSwitch = settingSwitch(context, "Минимизировать online", record.ghostMinimizeOnline);
+        ghostReadOnInteractionSwitch = settingSwitch(context, "Прочитать при взаимодействии", record.ghostReadOnInteraction);
+        ghostWarnSwitch = settingSwitch(context, "Предупреждать перед реакцией или ответом", record.ghostWarnBeforeInteraction);
+        ghostCard.addView(ghostModeSwitch);
+        ghostCard.addView(ghostReadSwitch);
+        ghostCard.addView(ghostStoriesSwitch);
+        ghostCard.addView(ghostTypingSwitch);
+        ghostCard.addView(ghostOnlineSwitch);
+        ghostCard.addView(ghostReadOnInteractionSwitch);
+        ghostCard.addView(ghostWarnSwitch);
+        ghostModeSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> setGhostControlsEnabled(isChecked));
+        ghostReadSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            ghostReadOnInteractionSwitch.setEnabled(ghostModeSwitch.isChecked() && isChecked);
+            ghostReadOnInteractionSwitch.setAlpha(ghostReadOnInteractionSwitch.isEnabled() ? 1f : .5f);
+        });
+        setGhostControlsEnabled(ghostModeSwitch.isChecked());
+
+        TextView ghostNote = text(
+                context,
+                "Best effort: клиент подавляет известные запросы активности, но отправка сообщения, реакция, звонок и другие серверные действия всё равно могут раскрыть присутствие.",
+                12,
+                Theme.key_windowBackgroundWhiteGrayText,
+                false
+        );
+        ghostNote.setLineSpacing(AndroidUtilities.dp(2), 1f);
+        ghostCard.addView(ghostNote, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 8, 0, 0));
+
         LinearLayout securityCard = card(context);
         content.addView(securityCard, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
         securityCard.addView(sectionLabel(context, "ЛОКАЛЬНАЯ ЗАЩИТА"));
@@ -238,6 +282,34 @@ public class AgramContainerSetupActivity extends BaseFragment {
         );
         note.setLineSpacing(AndroidUtilities.dp(2), 1f);
         securityCard.addView(note, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 8, 0, 0));
+
+        if (activeContainer) {
+            LinearLayout legendCard = card(context);
+            content.addView(legendCard, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
+            legendCard.addView(sectionLabel(context, "ЛОЖНЫЕ КОДЫ · ЛЕГЕНДА"));
+            for (int i = 0; i < decoyPinFields.length; i++) {
+                decoyPinFields[i] = input(context, "Ложный код " + (i + 1) + " — минимум 6 символов");
+                decoyPinFields[i].setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                decoyTargetFields[i] = input(context, "Номер аккаунта-легенды (1–" + UserConfig.MAX_ACCOUNT_COUNT + ")");
+                decoyTargetFields[i].setInputType(InputType.TYPE_CLASS_NUMBER);
+                if (i < record.decoyCodes.size()) {
+                    decoyTargetFields[i].setText(String.valueOf(record.decoyCodes.get(i).targetAccount + 1));
+                }
+                legendCard.addView(decoyPinFields[i], LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, 0, i == 0 ? 2 : 12, 0, 0));
+                legendCard.addView(decoyTargetFields[i], LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, 0, 6, 0, 0));
+            }
+            clearDecoyCodesSwitch = settingSwitch(context, "Удалить сохранённые ложные коды", false);
+            legendCard.addView(clearDecoyCodesSwitch, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 52, 0, 8, 0, 0));
+            TextView legendNote = text(
+                    context,
+                    "Ложный код открывает выбранный локальный аккаунт-легенду. Пустые поля сохраняют текущие коды. Автоматическое удаление, выход из сеансов и скрытые SOS-действия не выполняются.",
+                    12,
+                    Theme.key_windowBackgroundWhiteGrayText,
+                    false
+            );
+            legendNote.setLineSpacing(AndroidUtilities.dp(2), 1f);
+            legendCard.addView(legendNote, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 8, 0, 0));
+        }
 
         Space space = new Space(context);
         content.addView(space, LayoutHelper.createLinear(1, 8));
@@ -298,6 +370,10 @@ public class AgramContainerSetupActivity extends BaseFragment {
                     biometricSwitch.isChecked(),
                     selectedNotificationPrivacy()
             );
+            if (!saveDecoyCodes()) {
+                return;
+            }
+            saveGhostMode();
             Toast.makeText(getParentActivity(), "Настройки контейнера сохранены", Toast.LENGTH_SHORT).show();
             finishFragment();
             return;
@@ -327,6 +403,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
                     selectedNotificationPrivacy()
             );
         }
+        saveGhostMode();
         presentFragment(new LoginActivity(account), true);
     }
 
@@ -445,6 +522,84 @@ public class AgramContainerSetupActivity extends BaseFragment {
         fullNotifications.setChecked(privacy == AgramContainerManager.NOTIFICATION_FULL);
     }
 
+    private void saveGhostMode() {
+        AgramContainerManager.getInstance().updateGhostMode(
+                account,
+                ghostModeSwitch.isChecked(),
+                ghostReadSwitch.isChecked(),
+                ghostStoriesSwitch.isChecked(),
+                ghostTypingSwitch.isChecked(),
+                ghostOnlineSwitch.isChecked(),
+                ghostReadOnInteractionSwitch.isChecked(),
+                ghostWarnSwitch.isChecked()
+        );
+    }
+
+    private boolean saveDecoyCodes() {
+        if (clearDecoyCodesSwitch == null) {
+            return true;
+        }
+        int count = 0;
+        for (EditText field : decoyPinFields) {
+            if (field != null && !TextUtils.isEmpty(field.getText().toString())) {
+                count++;
+            }
+        }
+        if (count == 0 && !clearDecoyCodesSwitch.isChecked()) {
+            return true;
+        }
+        String[] pins = new String[count];
+        int[] targets = new int[count];
+        int index = 0;
+        for (int i = 0; i < decoyPinFields.length; i++) {
+            String pin = decoyPinFields[i].getText().toString();
+            if (TextUtils.isEmpty(pin)) {
+                continue;
+            }
+            String targetText = decoyTargetFields[i].getText().toString().trim();
+            if (pin.length() < 6 || TextUtils.isEmpty(targetText)) {
+                Toast.makeText(getParentActivity(), "Для каждого ложного кода укажите минимум 6 символов и аккаунт-легенду", Toast.LENGTH_LONG).show();
+                return false;
+            }
+            try {
+                pins[index] = pin;
+                targets[index] = Integer.parseInt(targetText) - 1;
+            } catch (NumberFormatException e) {
+                Toast.makeText(getParentActivity(), "Номер аккаунта-легенды указан неверно", Toast.LENGTH_LONG).show();
+                return false;
+            }
+            index++;
+        }
+        try {
+            AgramContainerManager.getInstance().updateDecoyCodes(
+                    account,
+                    pins,
+                    targets,
+                    clearDecoyCodesSwitch.isChecked()
+            );
+            return true;
+        } catch (IllegalArgumentException e) {
+            Toast.makeText(getParentActivity(), "Ложный код должен отличаться от настоящего, а легендой должен быть другой активный аккаунт", Toast.LENGTH_LONG).show();
+            return false;
+        }
+    }
+
+    private void setGhostControlsEnabled(boolean enabled) {
+        Switch[] controls = {
+                ghostReadSwitch,
+                ghostStoriesSwitch,
+                ghostTypingSwitch,
+                ghostOnlineSwitch,
+                ghostReadOnInteractionSwitch,
+                ghostWarnSwitch
+        };
+        for (Switch control : controls) {
+            boolean controlEnabled = enabled && (control != ghostReadOnInteractionSwitch || ghostReadSwitch.isChecked());
+            control.setEnabled(controlEnabled);
+            control.setAlpha(controlEnabled ? 1f : .5f);
+        }
+    }
+
     private int selectedNotificationPrivacy() {
         if (fullNotifications.isChecked()) {
             return AgramContainerManager.NOTIFICATION_FULL;
@@ -494,6 +649,16 @@ public class AgramContainerSetupActivity extends BaseFragment {
                 new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
                 new int[]{accent, secondary}
         ));
+        view.setPadding(0, AndroidUtilities.dp(4), 0, AndroidUtilities.dp(4));
+        return view;
+    }
+
+    private static Switch settingSwitch(Context context, String title, boolean checked) {
+        Switch view = new Switch(context);
+        view.setText(title);
+        view.setTextSize(15);
+        view.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+        view.setChecked(checked);
         view.setPadding(0, AndroidUtilities.dp(4), 0, AndroidUtilities.dp(4));
         return view;
     }
