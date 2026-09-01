@@ -1,6 +1,6 @@
 # ά‑Gram source overlay
 
-This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.17` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
+This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.18` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
 
 ## Base source
 
@@ -50,6 +50,7 @@ The resulting APK is under `TMessagesProj_AppStandalone/build/outputs/apk/afat/s
 - Automatic chat viewing and explicit read actions use separate paths. While read suppression is active, opening or scrolling through a regular chat does not mutate its local unread state, remove its notification, or send a receipt. The chat-list action and notification action “Mark as read” explicitly clear both local state and the server receipt; optional read-on-interaction does the same after a reply or reaction.
 - Story viewing follows the same local-preservation rule: in Ghost Mode an opened story keeps its unread ring and notification. Opening a story and sending any story reaction use explicit confirmation dialogs.
 - Per-container network source of truth and native proxy application: direct, custom SOCKS5/MTProto proxy, or Tor embedded with Guardian Project `tor-android` 0.4.8.17.2. No Orbot installation is required. One daemon is shared for memory efficiency while each container uses a distinct encrypted SOCKS isolation value; Tor always runs fail-closed and exposes only its dynamically allocated local port.
+- Tor bootstrap and control-port polling run only on the background queue. A single generation-aware poller exposes progress, fails with an actionable error after 120 seconds, and allows a clean retry without silently falling back to the direct route.
 - The dialogs header shows the active route plus the IP/country/region Telegram reports for the current authorization via `account.getAuthorizations`; that value is cached only in memory. The Tor control screen can rotate only the selected container's isolation credential or explicitly restart the shared daemon.
 - Manual vanilla, obfs4 and webtunnel bridges are stored encrypted with Android Keystore. Pluggable transports are provided in-process by `com.netzarchitekten:IPtProxy:5.5.1`; bridge changes are global because the memory-saving Tor daemon is shared.
 - Agram Push follows the selected container route. Its HTTPS stream uses the same dynamic Tor listener and container-specific SOCKS credentials, and reconnects immediately when the Tor state changes rather than falling back to direct networking.
@@ -60,6 +61,7 @@ The resulting APK is under `TMessagesProj_AppStandalone/build/outputs/apk/afat/s
 - Staggered lightweight connections for background accounts and lazy initialization of heavy Java controllers on selection.
 - Re-entrancy protection during account switching and sparse-slot-safe notification media handling.
 - Account selectors contain active sessions only. Ended, blocked and revoked sessions are removed during logout or migration, and their account slot becomes immediately reusable instead of leaving a non-actionable local card.
+- Cold start never infers logout from a temporarily inactive slot. Push-instance uniqueness uses a non-sensitive SHA-256 registry index instead of decrypting every account under one lock, preventing the Android Keystore startup ANR while confirmed logout still deletes its container.
 - Separate package, account types, MIME types, shortcuts, broadcast actions, app name and launcher icon.
 - Standalone foreground push service for use without Google Play Services. The default relay is configurable with `AGRAM_PUSH_BASE_URL` for reproducible self-hosting; only opaque wake signals pass through it, never Telegram message contents.
 - Android direct-share conversation shortcuts are disabled to avoid exposing a dialog from another container. On Android 13+ Recent Apps screenshots are disabled without blocking ordinary in-app screenshots.

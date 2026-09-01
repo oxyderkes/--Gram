@@ -65,6 +65,9 @@ required_tor_guards = (
     (core_gradle, "com.netzarchitekten:IPtProxy:5.5.1"),
     (tor_manager, "IsolateSOCKSAuth"),
     (tor_manager, "AgramSecureStore.encrypt(BRIDGE_SCOPE"),
+    (tor_manager, "BOOTSTRAP_TIMEOUT_MS"),
+    (tor_manager, "pollBootstrap"),
+    (tor_manager, "Utilities.globalQueue.postRunnable(() ->"),
     (network_controller, 'pause(account, "tor_starting")'),
     (network_controller, "rotateTorIsolation(account)"),
     (session_route, "TL_account.getAuthorizations"),
@@ -75,8 +78,12 @@ for source, guard in required_tor_guards:
 
 if "ensureUniquePushInstanceLocked" not in container_manager:
     errors.append("legacy duplicate push instances are not repaired")
-if "purgeOrphanedContainers()" not in application_loader:
-    errors.append("interrupted logout container cleanup is missing")
+if "PUSH_INSTANCE_HASH_PREFIX" not in container_manager or "readPushInstance" in container_manager:
+    errors.append("push identity checks must not decrypt every container")
+if "purgeOrphanedContainers()" in application_loader:
+    errors.append("cold start must not infer logout and delete containers")
+if "deleteContainer(currentAccount)" not in messages_controller:
+    errors.append("confirmed logout container cleanup is missing")
 
 for label, manifest in (("main", main_manifest), ("standalone", standalone_manifest)):
     if 'android:allowBackup="false"' not in manifest or 'android:fullBackupContent="false"' not in manifest:

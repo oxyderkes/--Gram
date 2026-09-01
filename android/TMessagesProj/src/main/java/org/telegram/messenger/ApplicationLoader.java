@@ -349,9 +349,8 @@ public class ApplicationLoader extends Application {
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
             UserConfig.getInstance(a).loadConfig();
         }
-        // Complete a container teardown if the previous process died between
-        // clearing Telegram's session and deleting the encrypted registry.
-        AgramContainerManager.getInstance().purgeOrphanedContainers();
+        // Never infer a logout during cold start: Telegram may still be
+        // restoring a session. Confirmed logout paths delete their container.
         ensureAccountInitialized(UserConfig.selectedAccount);
         SharedConfig.pushStringStatus = "__FIREBASE_GENERATING_SINCE_" + ConnectionsManager.getInstance(UserConfig.selectedAccount).getCurrentTime() + "__";
 

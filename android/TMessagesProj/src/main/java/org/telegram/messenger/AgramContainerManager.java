@@ -16,6 +16,7 @@ import org.json.JSONObject;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Locale;
 import java.util.TimeZone;
@@ -51,6 +52,7 @@ public final class AgramContainerManager {
     private static final String REGISTRY = "agram_container_registry";
     private static final String SLOT_PREFIX = "slot_";
     private static final String METADATA_PREFIX = "metadata_";
+    private static final String PUSH_INSTANCE_HASH_PREFIX = "push_instance_hash_";
     private static final int SCHEMA_VERSION = 6;
     private static final String LEGACY_DURESS_PREFS = "agram_duress_registry";
     private static final String LEGACY_DURESS_SCOPE = "agram_global_duress_v1";
@@ -152,19 +154,6 @@ public final class AgramContainerManager {
                 saveRecord(record);
             }
             return record;
-        }
-    }
-
-    /** Removes locked container records whose Telegram session is already gone. */
-    public void purgeOrphanedContainers() {
-        for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
-            if (UserConfig.getInstance(account).isClientActivated()) {
-                continue;
-            }
-            ContainerRecord record = getContainer(account);
-            if (record != null && record.profileLocked) {
-                deleteContainer(account);
-            }
         }
     }
 
@@ -334,6 +323,7 @@ public final class AgramContainerManager {
             preferences.edit()
                     .remove(SLOT_PREFIX + account)
                     .remove(METADATA_PREFIX + id)
+                    .remove(PUSH_INSTANCE_HASH_PREFIX + id)
                     .commit();
             recordCache.remove(account);
             Utilities.globalQueue.postRunnable(() -> deleteRecursively(getContainerDirectory(id)));
@@ -677,6 +667,7 @@ public final class AgramContainerManager {
             preferences.edit()
                     .putString(SLOT_PREFIX + record.account, record.id)
                     .putString(METADATA_PREFIX + record.id, Base64.encodeToString(encrypted, Base64.NO_WRAP))
+                    .putString(PUSH_INSTANCE_HASH_PREFIX + record.id, pushInstanceHash(record.agramPushInstance))
                     .commit();
             recordCache.put(record.account, record);
         } catch (Exception e) {
@@ -697,6 +688,14 @@ public final class AgramContainerManager {
             ContainerRecord record = fromJson(json);
             if (record.account != account || !id.equals(record.id)) {
                 throw new GeneralSecurityException("Container registry mismatch");
+            }
+            // This non-sensitive digest lets us enforce per-container push
+            // identities without decrypting every other account while the
+            // registry lock is held. Older records are indexed lazily.
+            String hashKey = PUSH_INSTANCE_HASH_PREFIX + id;
+            String expectedHash = pushInstanceHash(record.agramPushInstance);
+            if (!expectedHash.equals(preferences.getString(hashKey, ""))) {
+                preferences.edit().putString(hashKey, expectedHash).apply();
             }
             if (storedSchema < SCHEMA_VERSION || json.has("decoy_codes")) {
                 // Version 2 removes legacy false-code hashes from encrypted
@@ -841,6 +840,7 @@ public final class AgramContainerManager {
     }
 
     private boolean isPushInstanceInUseLocked(String instance, int exceptAccount) {
+        String candidateHash = pushInstanceHash(instance);
         for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
             if (account == exceptAccount) {
                 continue;
@@ -853,26 +853,25 @@ public final class AgramContainerManager {
                 continue;
             }
             String id = preferences.getString(SLOT_PREFIX + account, null);
-            if (!TextUtils.isEmpty(id) && instance.equals(readPushInstance(id))) {
+            if (!TextUtils.isEmpty(id) && candidateHash.equals(
+                    preferences.getString(PUSH_INSTANCE_HASH_PREFIX + id, ""))) {
                 return true;
             }
         }
         return false;
     }
 
-    private String readPushInstance(String id) {
+    private static String pushInstanceHash(String instance) {
         try {
-            String encoded = preferences.getString(METADATA_PREFIX + id, null);
-            if (TextUtils.isEmpty(encoded)) {
-                return "";
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(safe(instance).trim().getBytes(StandardCharsets.UTF_8));
+            StringBuilder result = new StringBuilder(digest.length * 2);
+            for (byte value : digest) {
+                result.append(String.format(Locale.US, "%02x", value & 0xff));
             }
-            byte[] encrypted = Base64.decode(encoded, Base64.NO_WRAP);
-            byte[] clear = AgramSecureStore.decrypt(id, encrypted, AgramSecureStore.aad(id, "metadata"));
-            JSONObject json = new JSONObject(new String(clear, StandardCharsets.UTF_8));
-            return json.optString("agram_push_instance", json.optString("unified_push_instance", ""));
-        } catch (Exception error) {
-            FileLog.e("Unable to inspect Agram push instance", error);
-            return "";
+            return result.toString();
+        } catch (GeneralSecurityException error) {
+            throw new IllegalStateException("SHA-256 is unavailable", error);
         }
     }
 
@@ -899,15 +898,11 @@ public final class AgramContainerManager {
                 .edit()
                 .clear()
                 .commit();
-        AgramSecureStore.deleteKey(LEGACY_DURESS_SCOPE);
-        // Touch every registered container once so schema-v1 metadata is
-        // rewritten immediately without the legacy code hashes.
-        for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
-            String id = preferences.getString(SLOT_PREFIX + account, null);
-            if (!TextUtils.isEmpty(id)) {
-                readRecord(account, id);
-            }
-        }
+        // KeyStore deletion may block on some Android builds. The registry is
+        // already unreachable, so finish the cryptographic cleanup off-main.
+        Utilities.globalQueue.postRunnable(() -> AgramSecureStore.deleteKey(LEGACY_DURESS_SCOPE));
+        // Container metadata migrates lazily when that account is opened.
+        // Decrypting every record here stalls cold start on Android Keystore.
         preferences.edit().putBoolean(LEGACY_CODES_PURGED, true).commit();
     }
 

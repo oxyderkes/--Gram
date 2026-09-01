@@ -12,6 +12,7 @@ import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.Base64;
 
@@ -47,6 +48,8 @@ public final class AgramTorManager {
     private static final String SETTINGS = "agram_tor_settings";
     private static final String BRIDGE_SCOPE = "agram_tor_bridges_v1";
     private static final String BRIDGE_DATA = "bridge_data";
+    private static final long BOOTSTRAP_TIMEOUT_MS = 120_000L;
+    private static final long BOOTSTRAP_POLL_MS = 1_500L;
 
     public interface Listener {
         void onTorStateChanged(String state);
@@ -72,8 +75,12 @@ public final class AgramTorManager {
     private boolean binding;
     private boolean bound;
     private boolean startScheduled;
+    private boolean bootstrapPollScheduled;
+    private int startGeneration;
     private volatile String state = STATE_STOPPED;
     private volatile String lastError = "";
+    private volatile String bootstrapStatus = "";
+    private volatile long bootstrapStartedAt;
     private volatile int socksPort;
 
     public static AgramTorManager getInstance() {
@@ -96,16 +103,9 @@ public final class AgramTorManager {
     }
 
     public String getBootstrapStatus() {
-        TorService service = torService;
-        if (service == null) {
-            return "";
-        }
-        try {
-            String value = service.getInfo("status/bootstrap-phase");
-            return value == null ? "" : value;
-        } catch (Throwable error) {
-            return "";
-        }
+        // UI must never touch Tor's control socket. The value is refreshed by
+        // a background poller while the daemon is bootstrapping.
+        return bootstrapStatus;
     }
 
     public void addListener(Listener listener) {
@@ -120,21 +120,31 @@ public final class AgramTorManager {
 
     /** Starts Tor and configured pluggable transports off the UI thread. */
     public synchronized void ensureStarted() {
+        if (STATE_ERROR.equals(state) && (binding || bound || startScheduled)) {
+            disconnect();
+        }
         if (STATE_READY.equals(state) || binding || bound || startScheduled) {
             return;
         }
         applicationContext = ApplicationLoader.applicationContext.getApplicationContext();
         registerReceiver();
         lastError = "";
+        bootstrapStatus = "";
+        bootstrapStartedAt = SystemClock.elapsedRealtime();
+        bootstrapPollScheduled = false;
         startScheduled = true;
+        final int generation = ++startGeneration;
         updateState(STATE_STARTING, 0);
         Utilities.globalQueue.postRunnable(() -> {
             try {
                 configureTor();
-                AndroidUtilities.runOnUIThread(this::bindTorService);
+                AndroidUtilities.runOnUIThread(() -> bindTorService(generation));
             } catch (Throwable error) {
                 FileLog.e("Unable to configure embedded Tor", error);
                 synchronized (AgramTorManager.this) {
+                    if (generation != startGeneration) {
+                        return;
+                    }
                     startScheduled = false;
                     lastError = safeError(error);
                     stopTransports();
@@ -232,9 +242,10 @@ public final class AgramTorManager {
         return result.toString();
     }
 
-    private synchronized void bindTorService() {
+    private synchronized void bindTorService(int generation) {
         startScheduled = false;
-        if (!STATE_STARTING.equals(state) || applicationContext == null || binding || bound) {
+        if (generation != startGeneration || !STATE_STARTING.equals(state)
+                || applicationContext == null || binding || bound) {
             return;
         }
         try {
@@ -358,18 +369,66 @@ public final class AgramTorManager {
                 .append(" socks5 ").append(address).append(':').append(port).append('\n');
     }
 
-    private synchronized void activateIfReady() {
-        if (torService == null) {
+    private synchronized void scheduleBootstrapPoll(int generation, long delay) {
+        if (generation != startGeneration || bootstrapPollScheduled) {
             return;
         }
-        int port = torService.getSocksPort();
+        bootstrapPollScheduled = true;
+        Utilities.globalQueue.postRunnable(() -> {
+            synchronized (AgramTorManager.this) {
+                bootstrapPollScheduled = false;
+                if (generation != startGeneration) {
+                    return;
+                }
+            }
+            pollBootstrap(generation);
+        }, delay);
+    }
+
+    private void pollBootstrap(int generation) {
+        TorService service;
+        long startedAt;
+        synchronized (this) {
+            if (generation != startGeneration || !bound || torService == null
+                    || (!STATE_STARTING.equals(state) && !STATE_READY.equals(state))) {
+                return;
+            }
+            service = torService;
+            startedAt = bootstrapStartedAt;
+        }
+
+        String phase = "";
+        int port = 0;
+        try {
+            String value = service.getInfo("status/bootstrap-phase");
+            phase = value == null ? "" : value;
+            port = service.getSocksPort();
+        } catch (Throwable error) {
+            FileLog.e("Unable to query embedded Tor bootstrap", error);
+            lastError = safeError(error);
+        }
+        bootstrapStatus = phase;
+
+        synchronized (this) {
+            if (generation != startGeneration || service != torService) {
+                return;
+            }
+        }
         if (port > 0 && port <= 65535) {
             lastError = "";
             updateState(STATE_READY, port);
+            return;
         }
+        if (SystemClock.elapsedRealtime() - startedAt >= BOOTSTRAP_TIMEOUT_MS) {
+            lastError = "Tor не подключился за 120 секунд. Проверьте сеть или добавьте рабочий мост.";
+            updateState(STATE_ERROR, 0);
+            return;
+        }
+        scheduleBootstrapPoll(generation, BOOTSTRAP_POLL_MS);
     }
 
     private synchronized void disconnect() {
+        startGeneration++;
         startScheduled = false;
         if (applicationContext != null && (bound || binding)) {
             try {
@@ -380,6 +439,9 @@ public final class AgramTorManager {
         torService = null;
         binding = false;
         bound = false;
+        bootstrapPollScheduled = false;
+        bootstrapStatus = "";
+        bootstrapStartedAt = 0;
         socksPort = 0;
         stopTransports();
     }
@@ -403,7 +465,10 @@ public final class AgramTorManager {
         }
         state = newState;
         socksPort = newPort;
-        AgramNetworkController.getInstance().onTorStateChanged(newState, newPort);
+        // Route changes can load encrypted container metadata. Never perform
+        // that work while a Tor callback is holding this manager's monitor.
+        Utilities.globalQueue.postRunnable(() ->
+                AgramNetworkController.getInstance().onTorStateChanged(newState, newPort));
         AndroidUtilities.runOnUIThread(() -> {
             for (Listener listener : listeners) {
                 listener.onTorStateChanged(newState);
@@ -418,7 +483,7 @@ public final class AgramTorManager {
                 binding = false;
                 bound = true;
                 torService = ((TorService.LocalBinder) service).getService();
-                activateIfReady();
+                scheduleBootstrapPoll(startGeneration, 0);
             }
         }
 
@@ -453,9 +518,10 @@ public final class AgramTorManager {
             }
             String status = intent.getStringExtra(TorService.EXTRA_STATUS);
             if (TorService.STATUS_ON.equals(status)) {
-                activateIfReady();
+                scheduleBootstrapPoll(startGeneration, 0);
             } else if (TorService.STATUS_STARTING.equals(status)) {
                 updateState(STATE_STARTING, 0);
+                scheduleBootstrapPoll(startGeneration, 0);
             } else if (TorService.STATUS_OFF.equals(status) || TorService.STATUS_STOPPING.equals(status)) {
                 updateState(STATE_STOPPED, 0);
             }
