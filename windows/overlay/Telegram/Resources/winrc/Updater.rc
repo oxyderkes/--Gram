@@ -55,10 +55,10 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "ά‑Gram"
             VALUE "FileDescription", "ά‑Gram Updater"
-            VALUE "FileVersion", "7.1.2-a-gram.16"
+            VALUE "FileVersion", "7.1.2-a-gram.17"
             VALUE "LegalCopyright", "Copyright (C) 2014-2026"
             VALUE "ProductName", "ά‑Gram"
-            VALUE "ProductVersion", "7.1.2-a-gram.16"
+            VALUE "ProductVersion", "7.1.2-a-gram.17"
         END
     END
     BLOCK "VarFileInfo"

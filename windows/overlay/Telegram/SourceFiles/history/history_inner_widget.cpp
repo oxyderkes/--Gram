@@ -64,6 +64,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/screen_reader_mode.h"
 #include "ui/ui_utility.h"
 #include "window/window_session_controller.h"
+#include "window/window_ghost_mode.h"
 #include "window/window_controller.h"
 #include "window/window_peer_menu.h"
 #include "window/notifications_manager.h"
@@ -568,21 +569,34 @@ void HistoryInner::reactionChosen(const ChosenReaction &reaction) {
 		}
 		return;
 	}
-	item->toggleReaction(reaction.id, HistoryReactionSource::Selector);
-	if (!ranges::contains(item->chosenReactions(), reaction.id)) {
-		return;
-	} else if (const auto view = viewByItem(item)) {
-		if (const auto top = itemTop(view); top >= 0) {
-			const auto geometry = reaction.localGeometry.isEmpty()
-				? mapFromGlobal(reaction.globalGeometry)
-				: reaction.localGeometry;
-			view->animateReaction({
-				.id = reaction.id,
-				.flyIcon = reaction.icon,
-				.flyFrom = geometry.translated(0, -top),
-			});
-		}
-	}
+	const auto itemId = item->fullId();
+	Window::ConfirmGhostModeAction(
+		_controller,
+		u"Реакция будет отправлена на сервер и может раскрыть вашу активность. Продолжить?"_q,
+		u"Отправить"_q,
+		crl::guard(this, [=] {
+			const auto item = session().data().message(itemId);
+			if (!item) {
+				return;
+			}
+			item->toggleReaction(
+				reaction.id,
+				HistoryReactionSource::Selector);
+			if (!ranges::contains(item->chosenReactions(), reaction.id)) {
+				return;
+			} else if (const auto view = viewByItem(item)) {
+				if (const auto top = itemTop(view); top >= 0) {
+					const auto geometry = reaction.localGeometry.isEmpty()
+						? mapFromGlobal(reaction.globalGeometry)
+						: reaction.localGeometry;
+					view->animateReaction({
+						.id = reaction.id,
+						.flyIcon = reaction.icon,
+						.flyFrom = geometry.translated(0, -top),
+					});
+				}
+			}
+		}));
 }
 
 Main::Session &HistoryInner::session() const {
@@ -2728,12 +2742,26 @@ void HistoryInner::toggleFavoriteReaction(not_null<Element*> view) const {
 			favorite,
 			&Data::Reaction::id)) {
 		return;
-	} else if (!ranges::contains(item->chosenReactions(), favorite)) {
-		if (const auto top = itemTop(view); top >= 0) {
-			view->animateReaction({ .id = favorite });
-		}
 	}
-	item->toggleReaction(favorite, HistoryReactionSource::Quick);
+	const auto itemId = item->fullId();
+	Window::ConfirmGhostModeAction(
+		_controller,
+		u"Реакция будет отправлена на сервер и может раскрыть вашу активность. Продолжить?"_q,
+		u"Отправить"_q,
+		crl::guard(this, [=] {
+			const auto item = session().data().message(itemId);
+			if (!item) {
+				return;
+			}
+			if (!ranges::contains(item->chosenReactions(), favorite)) {
+				if (const auto current = viewByItem(item)) {
+					if (const auto top = itemTop(current); top >= 0) {
+						current->animateReaction({ .id = favorite });
+					}
+				}
+			}
+			item->toggleReaction(favorite, HistoryReactionSource::Quick);
+		}));
 }
 
 HistoryView::SelectedQuote HistoryInner::selectedQuote(

@@ -23,6 +23,6 @@ constexpr auto AppNameOld = "Telegram Win (Unofficial)"_cs;
 constexpr auto AppName = "ά‑Gram"_cs;
 constexpr auto AppFile = "alpha-Gram"_cs;
 constexpr auto AppVersion = 7001002;
-constexpr auto AppVersionStr = "7.1.2-a-gram.16";
+constexpr auto AppVersionStr = "7.1.2-a-gram.17";
 constexpr auto AppBetaVersion = false;
 constexpr auto AppAlphaVersion = TDESKTOP_ALPHA_VERSION;

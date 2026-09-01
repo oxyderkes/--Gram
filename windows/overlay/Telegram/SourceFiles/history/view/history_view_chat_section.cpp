@@ -77,6 +77,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_peer_permissions_box.h"
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
+#include "window/window_ghost_mode.h"
 #include "window/window_peer_menu.h"
 #include "base/call_delayed.h"
 #include "base/qt/qt_key_modifiers.h"
@@ -690,11 +691,19 @@ ChatWidget::ChatWidget(
 				|| request.forceAnotherChat)) {
 			Controls::ShowReplyToChatBox(controller->uiShow(), { to });
 		} else if (!bottomBarActive && canSendReply) {
-			replyToMessage(to);
-			_composeControls->focus();
-			if (_composeSearch) {
-				_composeSearch->hideAnimated();
-			}
+			Window::ConfirmGhostModeAction(
+				controller,
+				(to.quote.empty()
+					? u"Ответ будет отправлен на сервер и может раскрыть вашу активность. Продолжить?"_q
+					: u"Ответ с цитатой будет отправлен на сервер и может раскрыть вашу активность. Продолжить?"_q),
+				u"Ответить"_q,
+				crl::guard(this, [=] {
+					replyToMessage(to);
+					_composeControls->focus();
+					if (_composeSearch) {
+						_composeSearch->hideAnimated();
+					}
+				}));
 		}
 	}, _inner->lifetime());
 
