@@ -881,9 +881,9 @@ public class ConnectionsManager extends BaseController {
         AndroidUtilities.runOnUIThread(() -> {
             AccountInstance accountInstance = AccountInstance.getInstance(currentAccount);
             if (accountInstance.getUserConfig().getClientUserId() != 0) {
-                // Keep a small local identity stub for a server-revoked session.
-                // It remains visible in the account selector and can be signed in
-                // again, while the auth key and the live account data are cleared.
+                // A definitive server-side revocation follows the same teardown
+                // path as a manual logout. Agram must not retain an unusable
+                // account card or reuse its container identity.
                 accountInstance.getMessagesController().performLogout(0, true);
             }
         });

@@ -83,12 +83,30 @@ public final class AgramNetworkController {
             }
             if (AgramTorManager.STATE_READY.equals(torState) && port > 0) {
                 applyTor(account, record, port, true);
+                final int routeAccount = account;
+                AndroidUtilities.runOnUIThread(() ->
+                        AgramSessionRouteController.getInstance().refresh(routeAccount, true), 3_000);
             } else {
                 pause(account, AgramTorManager.STATE_ERROR.equals(torState) ? "tor_error" : "tor_unavailable");
                 ConnectionsManager.native_setProxySettings(account, "", 1080, "", "", "");
             }
             AgramPushController.getInstance().onNetworkRouteChanged(account);
         }
+    }
+
+    /** Assigns a fresh Tor circuit group to this container only. */
+    public void rotateTorCircuit(int account) {
+        AgramContainerManager.ContainerRecord record = AgramContainerManager.getInstance().getContainer(account);
+        if (record == null || !AgramContainerManager.NETWORK_TOR.equals(record.proxyMode)) {
+            return;
+        }
+        pause(account, "tor_rotating");
+        AgramContainerManager.getInstance().rotateTorIsolation(account);
+        AgramSessionRouteController.getInstance().clear(account);
+        AgramPushController.getInstance().onNetworkRouteChanged(account);
+        apply(account, true);
+        AndroidUtilities.runOnUIThread(() ->
+                AgramSessionRouteController.getInstance().refresh(account, true), 4_000);
     }
 
     public void onProxyError() {

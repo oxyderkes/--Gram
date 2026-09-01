@@ -23,11 +23,15 @@ standalone_manifest = read("TMessagesProj/config/release/AndroidManifest_standal
 message_object = read("TMessagesProj/src/main/java/org/telegram/messenger/MessageObject.java")
 container_manager = read("TMessagesProj/src/main/java/org/telegram/messenger/AgramContainerManager.java")
 push_controller = read("TMessagesProj/src/main/java/org/telegram/messenger/AgramPushController.java")
+network_controller = read("TMessagesProj/src/main/java/org/telegram/messenger/AgramNetworkController.java")
+tor_manager = read("TMessagesProj/src/main/java/org/telegram/messenger/AgramTorManager.java")
+session_route = read("TMessagesProj/src/main/java/org/telegram/messenger/AgramSessionRouteController.java")
 container_setup = read("TMessagesProj/src/main/java/org/telegram/ui/AgramContainerSetupActivity.java")
 messages_controller = read("TMessagesProj/src/main/java/org/telegram/messenger/MessagesController.java")
 stories_controller = read("TMessagesProj/src/main/java/org/telegram/ui/Stories/StoriesController.java")
 chat_activity = read("TMessagesProj/src/main/java/org/telegram/ui/ChatActivity.java")
 launch_activity = read("TMessagesProj/src/main/java/org/telegram/ui/LaunchActivity.java")
+application_loader = read("TMessagesProj/src/main/java/org/telegram/messenger/ApplicationLoader.java")
 standalone_app_manifest = read("TMessagesProj_AppStandalone/src/main/AndroidManifest.xml")
 
 for label, source in (("core", core_gradle), ("standalone", standalone_gradle)):
@@ -56,6 +60,23 @@ embedded_push_sources = container_manager + push_controller + messages_controlle
 for guard in required_embedded_push_guards:
     if guard not in embedded_push_sources:
         errors.append(f"embedded per-container Agram Push guard is missing: {guard}")
+
+required_tor_guards = (
+    (core_gradle, "com.netzarchitekten:IPtProxy:5.5.1"),
+    (tor_manager, "IsolateSOCKSAuth"),
+    (tor_manager, "AgramSecureStore.encrypt(BRIDGE_SCOPE"),
+    (network_controller, 'pause(account, "tor_starting")'),
+    (network_controller, "rotateTorIsolation(account)"),
+    (session_route, "TL_account.getAuthorizations"),
+)
+for source, guard in required_tor_guards:
+    if guard not in source:
+        errors.append(f"embedded Tor/session-route guard is missing: {guard}")
+
+if "ensureUniquePushInstanceLocked" not in container_manager:
+    errors.append("legacy duplicate push instances are not repaired")
+if "purgeOrphanedContainers()" not in application_loader:
+    errors.append("interrupted logout container cleanup is missing")
 
 for label, manifest in (("main", main_manifest), ("standalone", standalone_manifest)):
     if 'android:allowBackup="false"' not in manifest or 'android:fullBackupContent="false"' not in manifest:

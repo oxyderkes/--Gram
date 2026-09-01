@@ -48,6 +48,7 @@ import android.graphics.drawable.AnimatedVectorDrawable;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.ShapeDrawable;
 import android.net.Uri;
 import android.os.Build;
@@ -100,6 +101,9 @@ import androidx.viewpager.widget.ViewPager;
 
 import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AgramContainerManager;
+import org.telegram.messenger.AgramNetworkController;
+import org.telegram.messenger.AgramSessionRouteController;
+import org.telegram.messenger.AgramTorManager;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.AnimationNotificationsLocker;
 import org.telegram.messenger.ApplicationLoader;
@@ -307,6 +311,8 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     private static final int ANIMATOR_ID_FILTER_TABS_VISIBLE = 8;
     private static final int ANIMATOR_ID_SEARCH_FILTER_TABS_VISIBLE = 9;
     private static final int GHOST_MODE_ITEM_ID = -1001;
+    private static final int AGRAM_ROUTE_ITEM_ID = -1002;
+    private static final int AGRAM_NETWORK_ITEM_ID = -1003;
 
     private final BoolAnimator animatorSearchVisible = new BoolAnimator(ANIMATOR_ID_SEARCH_VISIBLE,
             this, CubicBezierInterpolator.EASE_OUT_QUINT, 350);
@@ -509,6 +515,9 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     public ActionBarMenuItem searchItem;
     private ActionBarMenuItem optionsItem;
     private ActionBarMenuItem ghostModeItem;
+    private ActionBarMenuItem agramRouteItem;
+    private ActionBarMenuItem agramNetworkItem;
+    private ProxyDrawable agramNetworkDrawable;
     private ActionBarMenuItem speedItem;
     public static boolean switchingTheme;
     private ActionBarMenuItem doneItem;
@@ -2833,10 +2842,19 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
 
     private NotificationCenter.ObserversGroup observersGroup;
     private NotificationCenter.ObserversGroup globalObserversGroup;
+    private final AgramTorManager.Listener agramTorListener = state -> updateAgramRouteHeader();
+    private final AgramSessionRouteController.Listener agramRouteListener = (account, info) -> {
+        if (account == currentAccount) {
+            updateAgramRouteHeader();
+        }
+    };
 
     @Override
     public boolean onFragmentCreate() {
         super.onFragmentCreate();
+
+        AgramTorManager.getInstance().addListener(agramTorListener);
+        AgramSessionRouteController.getInstance().addListener(agramRouteListener);
 
         if (arguments != null) {
             onlySelect = arguments.getBoolean("onlySelect", false);
@@ -3075,6 +3093,8 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
 
     @Override
     public void onFragmentDestroy() {
+        AgramTorManager.getInstance().removeListener(agramTorListener);
+        AgramSessionRouteController.getInstance().removeListener(agramRouteListener);
         super.onFragmentDestroy();
         if (observersGroup != null) {
             observersGroup.removeAllObservers();
@@ -3448,6 +3468,42 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         fragmentSearchFieldWatcher.setDoNotCloseAfterFieldEmpty();
 
         if (initialDialogsType == DIALOGS_TYPE_DEFAULT && !onlySelect && searchString == null && folderId == 0 && communityId == 0) {
+            agramRouteItem = menu.addItem(AGRAM_ROUTE_ITEM_ID, "МАРШРУТ\nпроверяем…");
+            TextView routeText = agramRouteItem.getTextView();
+            routeText.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 9.5f);
+            routeText.setGravity(Gravity.CENTER);
+            routeText.setSingleLine(false);
+            routeText.setMaxLines(2);
+            routeText.setEllipsize(TextUtils.TruncateAt.END);
+            routeText.setPadding(dp(6), dp(3), dp(6), dp(3));
+            GradientDrawable routeBackground = new GradientDrawable();
+            routeBackground.setColor(ColorUtils.setAlphaComponent(
+                    getThemedColor(Theme.key_actionBarDefaultIcon), 22));
+            routeBackground.setStroke(dp(1), ColorUtils.setAlphaComponent(
+                    getThemedColor(Theme.key_actionBarDefaultIcon), 70));
+            routeBackground.setCornerRadius(dp(12));
+            routeText.setBackground(routeBackground);
+            ViewGroup.LayoutParams rawParams = agramRouteItem.getLayoutParams();
+            if (rawParams instanceof LinearLayout.LayoutParams) {
+                LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) rawParams;
+                params.width = dp(112);
+                params.leftMargin = dp(2);
+                params.rightMargin = dp(2);
+                agramRouteItem.setLayoutParams(params);
+            }
+            agramRouteItem.setOnClickListener(v -> presentFragment(new AgramTorSettingsActivity(currentAccount)));
+            agramRouteItem.setOnLongClickListener(v -> {
+                AgramSessionRouteController.getInstance().refresh(currentAccount, true);
+                return true;
+            });
+            agramNetworkDrawable = new ProxyDrawable(context);
+            agramNetworkDrawable.setColorFilter(new PorterDuffColorFilter(
+                    getThemedColor(Theme.key_actionBarDefaultIcon), PorterDuff.Mode.MULTIPLY));
+            agramNetworkItem = menu.addItemWithWidth(AGRAM_NETWORK_ITEM_ID,
+                    agramNetworkDrawable, dp(40), "Tor / proxy текущего контейнера");
+            agramNetworkItem.setOnClickListener(v -> presentFragment(new AgramTorSettingsActivity(currentAccount)));
+            updateAgramRouteHeader();
+
             ghostModeItem = menu.addItem(GHOST_MODE_ITEM_ID, R.drawable.msg_stories_stealth2);
             ghostModeItem.setOnClickListener(v -> toggleGhostMode());
             ghostModeItem.setOnLongClickListener(v -> {
@@ -7063,10 +7119,52 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 : "Ghost Mode выключен. Нажмите, чтобы включить");
     }
 
+    private void updateAgramRouteHeader() {
+        if (agramRouteItem == null) {
+            return;
+        }
+        AgramContainerManager.ContainerRecord record = AgramContainerManager.getInstance().getContainer(currentAccount);
+        String mode = record == null ? AgramContainerManager.NETWORK_DIRECT : record.proxyMode;
+        String modeLabel;
+        if (AgramContainerManager.NETWORK_TOR.equals(mode)) {
+            String torState = AgramTorManager.getInstance().getState();
+            modeLabel = AgramTorManager.STATE_READY.equals(torState) ? "◉ TOR" :
+                    (AgramTorManager.STATE_ERROR.equals(torState) ? "! TOR" : "… TOR");
+        } else if (AgramContainerManager.NETWORK_PROXY.equals(mode)) {
+            modeLabel = "◆ PROXY";
+        } else {
+            modeLabel = "● DIRECT";
+        }
+        AgramSessionRouteController.RouteInfo route = AgramSessionRouteController.getInstance().get(currentAccount);
+        String secondLine;
+        if (!TextUtils.isEmpty(route.ip)) {
+            String location = route.approximateLocation();
+            secondLine = route.ip + (TextUtils.isEmpty(location) ? "" : " · " + location);
+        } else if (route.loading) {
+            secondLine = "проверяем IP…";
+        } else {
+            String networkState = AgramNetworkController.getInstance().getState(currentAccount);
+            secondLine = networkState.startsWith("tor_") ? "сеть закрыта" : "IP не получен";
+        }
+        agramRouteItem.getTextView().setText(modeLabel + "\n" + secondLine);
+        agramRouteItem.setContentDescription(modeLabel + ". " + secondLine + ". Открыть настройки маршрута");
+        if (agramNetworkDrawable != null) {
+            boolean routed = !AgramContainerManager.NETWORK_DIRECT.equals(mode);
+            String networkState = AgramNetworkController.getInstance().getState(currentAccount);
+            boolean connected = routed && ("tor_active".equals(networkState) || "proxy_active".equals(networkState));
+            agramNetworkDrawable.setConnected(routed, connected, true);
+        }
+        if (agramNetworkItem != null) {
+            agramNetworkItem.setContentDescription(modeLabel + ". " + secondLine + ". Открыть управление Tor и proxy");
+        }
+    }
+
     @Override
     public void onResume() {
         super.onResume();
         updateGhostModeHeader();
+        updateAgramRouteHeader();
+        AgramSessionRouteController.getInstance().refresh(currentAccount, false);
         if (dialogStoriesCell != null) {
             dialogStoriesCell.onResume();
         }

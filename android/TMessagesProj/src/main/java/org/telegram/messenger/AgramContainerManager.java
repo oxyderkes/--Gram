@@ -51,7 +51,7 @@ public final class AgramContainerManager {
     private static final String REGISTRY = "agram_container_registry";
     private static final String SLOT_PREFIX = "slot_";
     private static final String METADATA_PREFIX = "metadata_";
-    private static final int SCHEMA_VERSION = 5;
+    private static final int SCHEMA_VERSION = 6;
     private static final String LEGACY_DURESS_PREFS = "agram_duress_registry";
     private static final String LEGACY_DURESS_SCOPE = "agram_global_duress_v1";
     private static final String LEGACY_CODES_PURGED = "legacy_false_codes_purged_v2";
@@ -105,11 +105,13 @@ public final class AgramContainerManager {
             if (!TextUtils.isEmpty(id)) {
                 ContainerRecord record = readRecord(account, id);
                 if (record != null) {
+                    ensureUniquePushInstanceLocked(record);
                     recordCache.put(account, record);
                     return record;
                 }
             }
             ContainerRecord record = createDefault(account);
+            ensureUniquePushInstanceLocked(record);
             saveRecord(record);
             return record;
         }
@@ -124,9 +126,45 @@ public final class AgramContainerManager {
             String id = preferences.getString(SLOT_PREFIX + account, null);
             ContainerRecord record = TextUtils.isEmpty(id) ? null : readRecord(account, id);
             if (record != null) {
+                ensureUniquePushInstanceLocked(record);
                 recordCache.put(account, record);
             }
             return record;
+        }
+    }
+
+    /**
+     * Repairs a stale locked card left by an interrupted or server-side
+     * logout. It is called only after UserConfig has been loaded.
+     */
+    public ContainerRecord ensureFreshContainerForSessionState(int account) {
+        synchronized (sync) {
+            ContainerRecord record = getContainer(account);
+            boolean active = UserConfig.getInstance(account).isClientActivated();
+            if (!active && record != null && record.profileLocked) {
+                deleteContainer(account);
+                record = null;
+            }
+            if (record == null) {
+                record = ensureContainer(account);
+            } else if (active && !record.profileLocked) {
+                record.profileLocked = true;
+                saveRecord(record);
+            }
+            return record;
+        }
+    }
+
+    /** Removes locked container records whose Telegram session is already gone. */
+    public void purgeOrphanedContainers() {
+        for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
+            if (UserConfig.getInstance(account).isClientActivated()) {
+                continue;
+            }
+            ContainerRecord record = getContainer(account);
+            if (record != null && record.profileLocked) {
+                deleteContainer(account);
+            }
         }
     }
 
@@ -175,20 +213,9 @@ public final class AgramContainerManager {
         }
     }
 
-    /** Unlocks only the pre-login labels after the Telegram session is gone. */
+    /** A logged-out engine slot never retains its old container identity. */
     public void markLoggedOut(int account) {
-        synchronized (sync) {
-            ContainerRecord record = getContainer(account);
-            if (record == null) {
-                return;
-            }
-            record.profileLocked = false;
-            record.agramPushEndpoint = "";
-            record.agramPushStatus = "not_registered";
-            record.profileId = UUID.randomUUID().toString();
-            record.profileGeneratedAt = System.currentTimeMillis();
-            saveRecord(record);
-        }
+        deleteContainer(account);
     }
 
     public boolean verifyPin(int account, String pin) {
@@ -412,6 +439,7 @@ public final class AgramContainerManager {
         public String proxyPassword;
         public String proxySecret;
         public String torIsolationId;
+        public long torIsolationChangedAt;
         public String pushMode;
         public String agramPushInstance;
         public String agramPushEndpoint;
@@ -527,6 +555,17 @@ public final class AgramContainerManager {
         }
     }
 
+    /** Rotates only this container's SOCKS-auth isolation group. */
+    public String rotateTorIsolation(int account) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            record.torIsolationId = newTorIsolationId();
+            record.torIsolationChangedAt = System.currentTimeMillis();
+            saveRecord(record);
+            return record.torIsolationId;
+        }
+    }
+
     public void savePushSettings(int account, String pushMode) {
         synchronized (sync) {
             ContainerRecord record = ensureContainer(account);
@@ -608,6 +647,7 @@ public final class AgramContainerManager {
         record.proxyPassword = "";
         record.proxySecret = "";
         record.torIsolationId = newTorIsolationId();
+        record.torIsolationChangedAt = record.createdAt;
         record.proxyEnabled = false;
         record.proxyMode = NETWORK_DIRECT;
         record.killSwitch = false;
@@ -700,6 +740,7 @@ public final class AgramContainerManager {
         json.put("proxy_password", record.proxyPassword);
         json.put("proxy_secret", record.proxySecret);
         json.put("tor_isolation_id", record.torIsolationId);
+        json.put("tor_isolation_changed_at", record.torIsolationChangedAt);
         json.put("push_mode", record.pushMode);
         json.put("agram_push_instance", record.agramPushInstance);
         json.put("agram_push_endpoint", record.agramPushEndpoint);
@@ -754,6 +795,7 @@ public final class AgramContainerManager {
         if (TextUtils.isEmpty(record.torIsolationId)) {
             record.torIsolationId = newTorIsolationId();
         }
+        record.torIsolationChangedAt = json.optLong("tor_isolation_changed_at", record.createdAt);
         String storedPushMode = json.optString("push_mode", PUSH_AGRAM);
         record.pushMode = PUSH_DIRECT.equals(storedPushMode) ? PUSH_DIRECT : PUSH_AGRAM;
         record.agramPushInstance = json.optString("agram_push_instance",
@@ -778,6 +820,60 @@ public final class AgramContainerManager {
         record.ghostReadOnInteraction = json.optBoolean("ghost_read_on_interaction", true);
         record.ghostWarnBeforeInteraction = json.optBoolean("ghost_warn_interaction", true);
         return record;
+    }
+
+    private void ensureUniquePushInstanceLocked(ContainerRecord record) {
+        String instance = safe(record.agramPushInstance).trim();
+        if (!TextUtils.isEmpty(instance) && !isPushInstanceInUseLocked(instance, record.account)) {
+            return;
+        }
+        do {
+            instance = "agram-" + UUID.randomUUID();
+        } while (isPushInstanceInUseLocked(instance, record.account));
+        record.agramPushInstance = instance;
+        // Do not retain an endpoint that was registered under a duplicated
+        // legacy instance. The embedded controller will register a fresh one.
+        record.agramPushEndpoint = "";
+        record.agramPushStatus = "not_registered";
+        if (!TextUtils.isEmpty(record.id)) {
+            saveRecord(record);
+        }
+    }
+
+    private boolean isPushInstanceInUseLocked(String instance, int exceptAccount) {
+        for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
+            if (account == exceptAccount) {
+                continue;
+            }
+            ContainerRecord cached = recordCache.get(account);
+            if (cached != null) {
+                if (instance.equals(cached.agramPushInstance)) {
+                    return true;
+                }
+                continue;
+            }
+            String id = preferences.getString(SLOT_PREFIX + account, null);
+            if (!TextUtils.isEmpty(id) && instance.equals(readPushInstance(id))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String readPushInstance(String id) {
+        try {
+            String encoded = preferences.getString(METADATA_PREFIX + id, null);
+            if (TextUtils.isEmpty(encoded)) {
+                return "";
+            }
+            byte[] encrypted = Base64.decode(encoded, Base64.NO_WRAP);
+            byte[] clear = AgramSecureStore.decrypt(id, encrypted, AgramSecureStore.aad(id, "metadata"));
+            JSONObject json = new JSONObject(new String(clear, StandardCharsets.UTF_8));
+            return json.optString("agram_push_instance", json.optString("unified_push_instance", ""));
+        } catch (Exception error) {
+            FileLog.e("Unable to inspect Agram push instance", error);
+            return "";
+        }
     }
 
     private void setPin(ContainerRecord record, String pin) {

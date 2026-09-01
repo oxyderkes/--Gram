@@ -100,8 +100,8 @@ public class AgramContainerSetupActivity extends BaseFragment {
 
     @Override
     public boolean onFragmentCreate() {
-        record = AgramContainerManager.getInstance().ensureContainer(account);
         activeContainer = UserConfig.getInstance(account).isClientActivated();
+        record = AgramContainerManager.getInstance().ensureFreshContainerForSessionState(account);
         if (activeContainer && account != UserConfig.selectedAccount) {
             return false;
         }
@@ -265,7 +265,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
 
         killSwitch = settingSwitch(context, "Kill switch: не выходить в сеть без выбранного маршрута", record.killSwitch);
         card.addView(killSwitch);
-        torStatusAction = action(context, "ЗАПУСТИТЬ ВСТРОЕННЫЙ TOR");
+        torStatusAction = action(context, "ОТКРЫТЬ НАСТРОЙКИ TOR");
         torStatusAction.setOnClickListener(v -> {
             selectNetworkMode(AgramContainerManager.NETWORK_TOR);
             if (AgramTorManager.STATE_ERROR.equals(AgramTorManager.getInstance().getState())) {
@@ -274,6 +274,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
                 AgramTorManager.getInstance().ensureStarted();
             }
             updateTorStatusAction();
+            presentFragment(new AgramTorSettingsActivity(account));
         });
         card.addView(torStatusAction, LayoutHelper.createLinear(-1, 44, 0, 8, 0, 0));
         TextView note = text(context,
@@ -448,7 +449,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
         String previewClientLanguage = clientLanguage();
         String previewSystemLanguage = systemLanguage();
         int previewTimezone = timezoneOffset();
-        if (record.profileLocked) {
+        if (activeContainer) {
             AgramContainerManager.SessionProfile locked = AgramContainerManager.getInstance().resolveSessionProfile(
                     account, detectedDeviceModel(), detectedSystemVersion(), detectedAppVersion(),
                     previewClientLanguage, previewSystemLanguage, previewTimezone);
@@ -488,7 +489,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
     }
 
     private void applyLockedProfileState() {
-        if (!record.profileLocked) return;
+        if (!activeContainer) return;
         presetProfile.setEnabled(false);
         customProfile.setEnabled(false);
         presetButton.setEnabled(false);
@@ -505,7 +506,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
         presetProfile.setChecked(!custom);
         customProfileFields.setVisibility(custom ? View.VISIBLE : View.GONE);
         presetButton.setVisibility(custom ? View.GONE : View.VISIBLE);
-        regenerateButton.setVisibility(record.profileLocked ? View.GONE : View.VISIBLE);
+        regenerateButton.setVisibility(activeContainer ? View.GONE : View.VISIBLE);
         updatePreview();
     }
 
@@ -520,6 +521,13 @@ public class AgramContainerSetupActivity extends BaseFragment {
         killSwitch.setAlpha(killSwitch.isEnabled() ? 1f : .5f);
         if (!proxy && !tor) killSwitch.setChecked(false);
         else if (tor) killSwitch.setChecked(true);
+        if (tor) {
+            // Selecting the built-in route starts bootstrap immediately. The
+            // network controller still remains fail-closed until it is ready.
+            killSwitch.setEnabled(false);
+            killSwitch.setAlpha(.65f);
+            AgramTorManager.getInstance().ensureStarted();
+        }
         if (torStatusAction != null) {
             torStatusAction.setVisibility(tor ? View.VISIBLE : View.GONE);
             updateTorStatusAction();
@@ -533,13 +541,13 @@ public class AgramContainerSetupActivity extends BaseFragment {
         }
         String torState = AgramTorManager.getInstance().getState();
         if (AgramTorManager.STATE_READY.equals(torState)) {
-            torStatusAction.setText("TOR ПОДКЛЮЧЁН · CIRCUIT ИЗОЛИРОВАН");
+            torStatusAction.setText("TOR ПОДКЛЮЧЁН · ОТКРЫТЬ УПРАВЛЕНИЕ");
         } else if (AgramTorManager.STATE_STARTING.equals(torState)) {
             torStatusAction.setText("TOR ЗАПУСКАЕТСЯ · СЕТЬ ЗАБЛОКИРОВАНА");
         } else if (AgramTorManager.STATE_ERROR.equals(torState)) {
-            torStatusAction.setText("ОШИБКА TOR · НАЖМИТЕ, ЧТОБЫ ПОВТОРИТЬ");
+            torStatusAction.setText("ОШИБКА TOR · ОТКРЫТЬ УПРАВЛЕНИЕ");
         } else {
-            torStatusAction.setText("ЗАПУСТИТЬ ВСТРОЕННЫЙ TOR");
+            torStatusAction.setText("ОТКРЫТЬ НАСТРОЙКИ TOR");
         }
     }
 
