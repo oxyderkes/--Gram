@@ -25,37 +25,59 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import org.telegram.messenger.AgramContainerManager;
+import org.telegram.messenger.AgramNetworkController;
+import org.telegram.messenger.AgramUnifiedPushController;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.UserConfig;
-import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.AlertDialog;
+import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.LayoutHelper;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
+import java.util.UUID;
 
-/**
- * Offline first-run screen. No Telegram controller is touched until the user
- * accepts the exact session profile shown here.
- */
+/** One account is always created in one automatically assigned container. */
 public class AgramContainerSetupActivity extends BaseFragment {
 
     private final int account;
-    private EditText nameField;
-    private EditText pinField;
-    private RadioButton minimalProfile;
-    private RadioButton compatibleProfile;
+    private AgramContainerManager.ContainerRecord record;
+    private boolean activeContainer;
+
+    private RadioButton presetProfile;
     private RadioButton customProfile;
+    private TextView presetButton;
+    private TextView regenerateButton;
     private LinearLayout customProfileFields;
     private EditText deviceModelField;
     private EditText systemVersionField;
-    private EditText appVersionField;
-    private TextView detectProfileButton;
+    private TextView preview;
+    private int pendingPresetIndex;
+    private String pendingProfileId;
+
+    private RadioButton directNetwork;
+    private RadioButton proxyNetwork;
+    private RadioButton torNetwork;
+    private LinearLayout proxyFields;
+    private EditText proxyAddressField;
+    private EditText proxyPortField;
+    private EditText proxyUsernameField;
+    private EditText proxyPasswordField;
+    private EditText proxySecretField;
+    private Switch killSwitch;
+
+    private RadioButton unifiedPush;
+    private RadioButton directPush;
+    private TextView distributorButton;
+    private String selectedDistributor;
+
+    private EditText pinField;
     private Switch biometricSwitch;
     private Switch ghostReadSwitch;
     private Switch ghostStoriesSwitch;
@@ -66,15 +88,12 @@ public class AgramContainerSetupActivity extends BaseFragment {
     private RadioButton hiddenNotifications;
     private RadioButton authorNotifications;
     private RadioButton fullNotifications;
-    private TextView preview;
-    private AgramContainerManager.ContainerRecord record;
 
     public AgramContainerSetupActivity() {
         this(UserConfig.selectedAccount);
     }
 
     public AgramContainerSetupActivity(int account) {
-        super();
         this.account = account;
         currentAccount = account;
     }
@@ -82,476 +101,515 @@ public class AgramContainerSetupActivity extends BaseFragment {
     @Override
     public boolean onFragmentCreate() {
         record = AgramContainerManager.getInstance().ensureContainer(account);
+        activeContainer = UserConfig.getInstance(account).isClientActivated();
+        if (activeContainer && account != UserConfig.selectedAccount) {
+            return false;
+        }
+        pendingPresetIndex = record.presetIndex;
+        pendingProfileId = TextUtils.isEmpty(record.profileId) ? UUID.randomUUID().toString() : record.profileId;
+        selectedDistributor = TextUtils.isEmpty(record.unifiedPushDistributor)
+                ? AgramUnifiedPushController.getInstance().getCurrentDistributor(
+                        org.telegram.messenger.ApplicationLoader.applicationContext)
+                : record.unifiedPushDistributor;
         return super.onFragmentCreate();
     }
 
     @Override
     public View createView(Context context) {
-        boolean activeContainer = UserConfig.getInstance(account).isClientActivated();
         actionBar.setBackButtonImage(R.drawable.ic_ab_back);
         actionBar.setAllowOverlayTitle(true);
-        actionBar.setTitle(activeContainer ? "Защита контейнера" : (record.profileLocked ? "Контейнер" : "Новый контейнер"));
+        actionBar.setTitle(activeContainer ? "Контейнер аккаунта" : "Новый аккаунт");
         actionBar.setActionBarMenuOnItemClick(new ActionBar.ActionBarMenuOnItemClick() {
             @Override
             public void onItemClick(int id) {
-                if (id == -1) {
-                    finishFragment();
-                }
+                if (id == -1) finishFragment();
             }
         });
 
         FrameLayout root = new FrameLayout(context);
         root.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundGray));
         fragmentView = root;
-
-        android.widget.ScrollView scrollView = new android.widget.ScrollView(context);
-        scrollView.setFillViewport(true);
-        root.addView(scrollView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
-
+        android.widget.ScrollView scroll = new android.widget.ScrollView(context);
+        scroll.setFillViewport(true);
+        root.addView(scroll, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
         LinearLayout content = new LinearLayout(context);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(AndroidUtilities.dp(20), AndroidUtilities.dp(20), AndroidUtilities.dp(20), AndroidUtilities.dp(32));
-        scrollView.addView(content, new android.widget.ScrollView.LayoutParams(
-                android.widget.ScrollView.LayoutParams.MATCH_PARENT,
-                android.widget.ScrollView.LayoutParams.WRAP_CONTENT
-        ));
+        scroll.addView(content, new android.widget.ScrollView.LayoutParams(-1, -2));
 
-        TextView title = text(context, "Изолированный аккаунт", 26, Theme.key_windowBackgroundWhiteBlackText, true);
-        content.addView(title);
-        TextView subtitle = text(
-                context,
+        content.addView(text(context, "Один аккаунт — один контейнер", 26,
+                Theme.key_windowBackgroundWhiteBlackText, true));
+        TextView subtitle = text(context,
                 activeContainer
-                        ? "Настройки относятся только к текущему аккаунту и хранятся локально. Профиль уже активной Telegram-сессии изменить нельзя."
-                        : "Сначала создаётся локальный контейнер. Только после проверки профиля будет открыта авторизация Telegram.",
-                15,
-                Theme.key_windowBackgroundWhiteGrayText,
-                false
-        );
+                        ? "Вы находитесь внутри нужного контейнера. Изменения сети, push и локальной защиты применятся только к этому аккаунту."
+                        : "Контейнер назначен автоматически. Выберите профиль устройства, проверьте данные и затем переходите к входу.",
+                15, Theme.key_windowBackgroundWhiteGrayText, false);
         subtitle.setLineSpacing(AndroidUtilities.dp(2), 1f);
-        content.addView(subtitle, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 8, 0, 18));
+        content.addView(subtitle, LayoutHelper.createLinear(-1, -2, 0, 8, 0, 18));
 
         LinearLayout identityCard = card(context);
-        content.addView(identityCard, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
-        identityCard.addView(sectionLabel(context, "КОНТЕЙНЕР"));
-        if (!activeContainer) {
-            TextView containerPicker = text(
-                    context,
-                    containerPickerLabel(account, record),
-                    15,
-                    Theme.key_windowBackgroundWhiteBlueText,
-                    true
-            );
-            containerPicker.setGravity(Gravity.CENTER_VERTICAL);
-            containerPicker.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(8), AndroidUtilities.dp(14), AndroidUtilities.dp(8));
-            containerPicker.setBackground(rounded(Theme.getColor(Theme.key_windowBackgroundGray), 10));
-            containerPicker.setOnClickListener(v -> showContainerPicker());
-            identityCard.addView(containerPicker, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 52, 0, 0, 0, 10));
-        }
-        nameField = input(context, "Название контейнера");
-        nameField.setText(record.name);
-        nameField.setSelection(nameField.length());
-        identityCard.addView(nameField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 52));
+        content.addView(identityCard, LayoutHelper.createLinear(-1, -2, 0, 0, 0, 12));
+        identityCard.addView(sectionLabel(context, "АВТОМАТИЧЕСКИЙ КОНТЕЙНЕР"));
+        identityCard.addView(text(context,
+                "Аккаунт " + (account + 1) + " · локальная изоляция включена\nВыбор контейнера не требуется и недоступен.",
+                15, Theme.key_windowBackgroundWhiteBlackText, true));
 
-        LinearLayout profileCard = card(context);
-        content.addView(profileCard, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
-        profileCard.addView(sectionLabel(context, "ПРОФИЛЬ СЕССИИ"));
+        addProfileCard(context, content);
+        addNetworkCard(context, content);
+        addPushCard(context, content);
+        addGhostCard(context, content);
+        addSecurityCard(context, content);
 
-        minimalProfile = radio(context, "Минимальный", "Telegram увидит нейтральное Agram Android и основную версию Android.");
-        compatibleProfile = radio(context, "Авто", "Реальные модель устройства, Android/SDK и версия установленной ά‑Gram.");
-        customProfile = radio(context, "Вручную", "Своя постоянная подпись устройства для этой сессии; задаётся до входа.");
-        profileCard.addView(minimalProfile);
-        profileCard.addView(compatibleProfile);
-        profileCard.addView(customProfile);
-        minimalProfile.setOnClickListener(v -> selectProfileMode(AgramContainerManager.PROFILE_MINIMAL));
-        compatibleProfile.setOnClickListener(v -> selectProfileMode(AgramContainerManager.PROFILE_COMPATIBLE));
+        Space space = new Space(context);
+        content.addView(space, LayoutHelper.createLinear(1, 8));
+        TextView continueButton = text(context,
+                activeContainer ? "СОХРАНИТЬ НАСТРОЙКИ" : "ПРОДОЛЖИТЬ К ВХОДУ",
+                14, Theme.key_featuredStickers_buttonText, true);
+        continueButton.setGravity(Gravity.CENTER);
+        continueButton.setBackground(rounded(Theme.getColor(Theme.key_featuredStickers_addButton), 12));
+        continueButton.setOnClickListener(v -> saveAndContinue());
+        content.addView(continueButton, LayoutHelper.createLinear(-1, 52));
+
+        applyLockedProfileState();
+        selectProfileMode(record.profileMode == AgramContainerManager.PROFILE_CUSTOM
+                ? AgramContainerManager.PROFILE_CUSTOM : AgramContainerManager.PROFILE_PRESET);
+        selectNetworkMode(record.proxyMode);
+        selectPushMode(record.pushMode);
+        updatePreview();
+        return fragmentView;
+    }
+
+    private void addProfileCard(Context context, LinearLayout content) {
+        LinearLayout card = card(context);
+        content.addView(card, LayoutHelper.createLinear(-1, -2, 0, 0, 0, 12));
+        card.addView(sectionLabel(context, "ПРОФИЛЬ УСТРОЙСТВА"));
+        presetProfile = radio(context, "Один из 10 пресетов",
+                "Стандартная согласованная пара модели и версии Android.");
+        customProfile = radio(context, "Вручную",
+                "Свои значения модели устройства и версии Android.");
+        card.addView(presetProfile);
+        card.addView(customProfile);
+        presetProfile.setOnClickListener(v -> selectProfileMode(AgramContainerManager.PROFILE_PRESET));
         customProfile.setOnClickListener(v -> selectProfileMode(AgramContainerManager.PROFILE_CUSTOM));
+
+        presetButton = action(context, presetLabel());
+        presetButton.setOnClickListener(v -> showPresetPicker());
+        card.addView(presetButton, LayoutHelper.createLinear(-1, 48, 0, 6, 0, 0));
+        regenerateButton = action(context, "СГЕНЕРИРОВАТЬ ДРУГОЙ ПРОФИЛЬ");
+        regenerateButton.setOnClickListener(v -> regenerateProfile());
+        card.addView(regenerateButton, LayoutHelper.createLinear(-1, 44, 0, 8, 0, 0));
 
         customProfileFields = new LinearLayout(context);
         customProfileFields.setOrientation(LinearLayout.VERTICAL);
-        deviceModelField = profileInput(context, "Модель устройства", valueOrDetected(record.deviceModel, detectedDeviceModel()));
-        systemVersionField = profileInput(context, "Версия системы", valueOrDetected(record.systemVersion, detectedSystemVersion()));
-        appVersionField = profileInput(context, "Версия клиента", valueOrDetected(record.appVersion, detectedAppVersion()));
-        customProfileFields.addView(deviceModelField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, 0, 6, 0, 0));
-        customProfileFields.addView(systemVersionField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, 0, 6, 0, 0));
-        customProfileFields.addView(appVersionField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, 0, 6, 0, 0));
+        AgramContainerManager.ProfilePreset preset = AgramContainerManager.getProfilePreset(pendingPresetIndex);
+        deviceModelField = profileInput(context, "Модель устройства", valueOr(record.deviceModel, preset.deviceModel));
+        systemVersionField = profileInput(context, "Версия Android", valueOr(record.systemVersion, preset.systemVersion));
+        customProfileFields.addView(deviceModelField, LayoutHelper.createLinear(-1, 48, 0, 6, 0, 0));
+        customProfileFields.addView(systemVersionField, LayoutHelper.createLinear(-1, 48, 0, 6, 0, 0));
+        card.addView(customProfileFields, LayoutHelper.createLinear(-1, -2));
 
-        detectProfileButton = text(context, "ЗАПОЛНИТЬ С ЭТОГО УСТРОЙСТВА", 13, Theme.key_windowBackgroundWhiteBlueText, true);
-        detectProfileButton.setGravity(Gravity.CENTER);
-        detectProfileButton.setBackground(rounded(Theme.getColor(Theme.key_windowBackgroundGray), 10));
-        detectProfileButton.setOnClickListener(v -> fillDetectedProfile());
-        customProfileFields.addView(detectProfileButton, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 44, 0, 8, 0, 0));
-
-        TextView profileNote = text(
-                context,
-                "Допустимо 1–64 печатных символа. Значения не меняют реальную модель телефона и не обходят ограничения Telegram.",
-                12,
-                Theme.key_windowBackgroundWhiteGrayText,
-                false
-        );
-        profileNote.setLineSpacing(AndroidUtilities.dp(2), 1f);
-        customProfileFields.addView(profileNote, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 8, 0, 0));
-        profileCard.addView(customProfileFields, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 4, 0, 0));
-
-        TextWatcher profileWatcher = new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-            }
-
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
-                updatePreview();
-            }
-
-            @Override
-            public void afterTextChanged(Editable s) {
-            }
+        TextWatcher watcher = new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            public void onTextChanged(CharSequence s, int start, int before, int count) { updatePreview(); }
+            public void afterTextChanged(Editable s) { }
         };
-        deviceModelField.addTextChangedListener(profileWatcher);
-        systemVersionField.addTextChangedListener(profileWatcher);
-        appVersionField.addTextChangedListener(profileWatcher);
+        deviceModelField.addTextChangedListener(watcher);
+        systemVersionField.addTextChangedListener(watcher);
+
+        TextView note = text(context,
+                "Версия Agram и api_id всегда передаются настоящими. official_app не подделывается. После входа профиль фиксируется до завершения Telegram-сессии.",
+                12, Theme.key_windowBackgroundWhiteGrayText, false);
+        note.setLineSpacing(AndroidUtilities.dp(2), 1f);
+        card.addView(note, LayoutHelper.createLinear(-1, -2, 0, 10, 0, 0));
 
         preview = text(context, "", 13, Theme.key_windowBackgroundWhiteGrayText, false);
         preview.setTypeface(android.graphics.Typeface.MONOSPACE);
         preview.setTextIsSelectable(true);
-        GradientDrawable previewBackground = rounded(Theme.getColor(Theme.key_windowBackgroundGray), 12);
-        preview.setBackground(previewBackground);
+        preview.setBackground(rounded(Theme.getColor(Theme.key_windowBackgroundGray), 12));
         preview.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(12), AndroidUtilities.dp(14), AndroidUtilities.dp(12));
-        profileCard.addView(preview, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 10, 0, 0));
+        card.addView(preview, LayoutHelper.createLinear(-1, -2, 0, 10, 0, 0));
+    }
 
-        LinearLayout ghostCard = card(context);
-        content.addView(ghostCard, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
-        ghostCard.addView(sectionLabel(context, "GHOST MODE"));
+    private void addNetworkCard(Context context, LinearLayout content) {
+        LinearLayout card = card(context);
+        content.addView(card, LayoutHelper.createLinear(-1, -2, 0, 0, 0, 12));
+        card.addView(sectionLabel(context, "СЕТЬ ЭТОГО КОНТЕЙНЕРА"));
+        directNetwork = radio(context, "Прямое соединение", "Без локального proxy/Tor.");
+        proxyNetwork = radio(context, "Свой прокси", "SOCKS5 или MTProto, только для этого аккаунта.");
+        torNetwork = radio(context, "Tor через Orbot", "До готовности Orbot сеть контейнера будет заблокирована.");
+        card.addView(directNetwork);
+        card.addView(proxyNetwork);
+        card.addView(torNetwork);
+        directNetwork.setOnClickListener(v -> selectNetworkMode(AgramContainerManager.NETWORK_DIRECT));
+        proxyNetwork.setOnClickListener(v -> selectNetworkMode(AgramContainerManager.NETWORK_PROXY));
+        torNetwork.setOnClickListener(v -> selectNetworkMode(AgramContainerManager.NETWORK_TOR));
+
+        proxyFields = new LinearLayout(context);
+        proxyFields.setOrientation(LinearLayout.VERTICAL);
+        proxyAddressField = profileInput(context, "Адрес прокси", record.proxyAddress);
+        proxyPortField = profileInput(context, "Порт", Integer.toString(record.proxyPort > 0 ? record.proxyPort : 1080));
+        proxyPortField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        proxyUsernameField = profileInput(context, "Логин (необязательно)", record.proxyUsername);
+        proxyPasswordField = profileInput(context, "Пароль (необязательно)", record.proxyPassword);
+        proxyPasswordField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        proxySecretField = profileInput(context, "MTProto secret (необязательно)", record.proxySecret);
+        proxyFields.addView(proxyAddressField, LayoutHelper.createLinear(-1, 48, 0, 6, 0, 0));
+        proxyFields.addView(proxyPortField, LayoutHelper.createLinear(-1, 48, 0, 6, 0, 0));
+        proxyFields.addView(proxyUsernameField, LayoutHelper.createLinear(-1, 48, 0, 6, 0, 0));
+        proxyFields.addView(proxyPasswordField, LayoutHelper.createLinear(-1, 48, 0, 6, 0, 0));
+        proxyFields.addView(proxySecretField, LayoutHelper.createLinear(-1, 48, 0, 6, 0, 0));
+        card.addView(proxyFields, LayoutHelper.createLinear(-1, -2));
+
+        killSwitch = settingSwitch(context, "Kill switch: не выходить в сеть без выбранного маршрута", record.killSwitch);
+        card.addView(killSwitch);
+        TextView openOrbot = action(context, AgramNetworkController.getInstance().isOrbotInstalled()
+                ? "ОТКРЫТЬ ORBOT / СМЕНИТЬ МОСТ" : "ORBOT НЕ УСТАНОВЛЕН");
+        openOrbot.setOnClickListener(v -> {
+            if (AgramNetworkController.getInstance().isOrbotInstalled()) {
+                AgramNetworkController.getInstance().openOrbot(getParentActivity());
+            } else {
+                Toast.makeText(getParentActivity(), "Установите Orbot и вернитесь в Agram", Toast.LENGTH_LONG).show();
+            }
+        });
+        card.addView(openOrbot, LayoutHelper.createLinear(-1, 44, 0, 8, 0, 0));
+        TextView note = text(context,
+                "При ошибке прокси или остановке Orbot kill switch ставит MTProto-сеть только этого контейнера на паузу. Локальная история остаётся доступной.",
+                12, Theme.key_windowBackgroundWhiteGrayText, false);
+        note.setLineSpacing(AndroidUtilities.dp(2), 1f);
+        card.addView(note, LayoutHelper.createLinear(-1, -2, 0, 8, 0, 0));
+    }
+
+    private void addPushCard(Context context, LinearLayout content) {
+        LinearLayout card = card(context);
+        content.addView(card, LayoutHelper.createLinear(-1, -2, 0, 0, 0, 12));
+        card.addView(sectionLabel(context, "PUSH ЭТОГО КОНТЕЙНЕРА"));
+        unifiedPush = radio(context, "UnifiedPush", "Отдельный endpoint и instance для этого аккаунта.");
+        directPush = radio(context, "Прямое MTProto-соединение", "Без внешнего push-дистрибьютора.");
+        card.addView(unifiedPush);
+        card.addView(directPush);
+        unifiedPush.setOnClickListener(v -> selectPushMode(AgramContainerManager.PUSH_UNIFIED));
+        directPush.setOnClickListener(v -> selectPushMode(AgramContainerManager.PUSH_DIRECT));
+        distributorButton = action(context, distributorLabel());
+        distributorButton.setOnClickListener(v -> showDistributorPicker());
+        card.addView(distributorButton, LayoutHelper.createLinear(-1, 48, 0, 6, 0, 0));
+        TextView note = text(context,
+                "Endpoint хранится в зашифрованной записи контейнера и регистрируется в Telegram как Simple Push type 4 без объединения other_uids.",
+                12, Theme.key_windowBackgroundWhiteGrayText, false);
+        note.setLineSpacing(AndroidUtilities.dp(2), 1f);
+        card.addView(note, LayoutHelper.createLinear(-1, -2, 0, 8, 0, 0));
+    }
+
+    private void addGhostCard(Context context, LinearLayout content) {
+        LinearLayout card = card(context);
+        content.addView(card, LayoutHelper.createLinear(-1, -2, 0, 0, 0, 12));
+        card.addView(sectionLabel(context, "GHOST MODE"));
         ghostReadSwitch = settingSwitch(context, "Не отправлять отметку о прочтении", record.ghostSuppressReadReceipts);
         ghostStoriesSwitch = settingSwitch(context, "Не показывать просмотр историй", record.ghostSuppressStoryViews);
         ghostTypingSwitch = settingSwitch(context, "Не отправлять typing / recording", record.ghostSuppressTyping);
         ghostOnlineSwitch = settingSwitch(context, "Минимизировать online", record.ghostMinimizeOnline);
         ghostReadOnInteractionSwitch = settingSwitch(context, "Прочитать при взаимодействии", record.ghostReadOnInteraction);
         ghostWarnSwitch = settingSwitch(context, "Предупреждать перед реакцией или ответом", record.ghostWarnBeforeInteraction);
-        ghostCard.addView(ghostReadSwitch);
-        ghostCard.addView(ghostStoriesSwitch);
-        ghostCard.addView(ghostTypingSwitch);
-        ghostCard.addView(ghostOnlineSwitch);
-        ghostCard.addView(ghostReadOnInteractionSwitch);
-        ghostCard.addView(ghostWarnSwitch);
-        ghostReadSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            ghostReadOnInteractionSwitch.setEnabled(isChecked);
-            ghostReadOnInteractionSwitch.setAlpha(ghostReadOnInteractionSwitch.isEnabled() ? 1f : .5f);
+        card.addView(ghostReadSwitch);
+        card.addView(ghostStoriesSwitch);
+        card.addView(ghostTypingSwitch);
+        card.addView(ghostOnlineSwitch);
+        card.addView(ghostReadOnInteractionSwitch);
+        card.addView(ghostWarnSwitch);
+        ghostReadSwitch.setOnCheckedChangeListener((button, checked) -> {
+            ghostReadOnInteractionSwitch.setEnabled(checked);
+            ghostReadOnInteractionSwitch.setAlpha(checked ? 1f : .5f);
         });
-        updateGhostControlsEnabled();
+    }
 
-        TextView ghostNote = text(
-                context,
-                "Главный переключатель находится в шапке списка диалогов. Клиент подавляет известные запросы активности, но отправка сообщения, реакция, звонок и другие серверные действия всё равно могут раскрыть присутствие.",
-                12,
-                Theme.key_windowBackgroundWhiteGrayText,
-                false
-        );
-        ghostNote.setLineSpacing(AndroidUtilities.dp(2), 1f);
-        ghostCard.addView(ghostNote, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 8, 0, 0));
-
-        LinearLayout securityCard = card(context);
-        content.addView(securityCard, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
-        securityCard.addView(sectionLabel(context, "ЛОКАЛЬНАЯ ЗАЩИТА"));
-        pinField = input(context, activeContainer
-                ? "Новый PIN — оставить пустым, чтобы не менять"
-                : "PIN — минимум 6 символов (необязательно)");
+    private void addSecurityCard(Context context, LinearLayout content) {
+        LinearLayout card = card(context);
+        content.addView(card, LayoutHelper.createLinear(-1, -2, 0, 0, 0, 12));
+        card.addView(sectionLabel(context, "ЛОКАЛЬНАЯ ЗАЩИТА"));
+        pinField = input(context, activeContainer ? "Новый PIN — пусто, чтобы не менять" : "PIN — минимум 6 символов (необязательно)");
         pinField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        securityCard.addView(pinField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 52));
-
-        biometricSwitch = new Switch(context);
-        biometricSwitch.setText("Разрешить биометрию после настройки PIN");
-        biometricSwitch.setTextSize(15);
-        biometricSwitch.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
-        biometricSwitch.setChecked(record.biometricEnabled);
-        biometricSwitch.setPadding(0, AndroidUtilities.dp(8), 0, AndroidUtilities.dp(4));
-        securityCard.addView(biometricSwitch, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 52));
-
-        securityCard.addView(sectionLabel(context, "УВЕДОМЛЕНИЯ"), LayoutHelper.createLinear(
-                LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 12, 0, 0));
-        hiddenNotifications = radio(context, "Скрытые", "На экране блокировки виден только Agram и факт нового сообщения.");
-        authorNotifications = radio(context, "Только автор", "Виден собеседник или чат, но не текст и не вложения.");
-        fullNotifications = radio(context, "Полные", "Стандартное отображение Telegram с текстом и доступными превью.");
-        securityCard.addView(hiddenNotifications);
-        securityCard.addView(authorNotifications);
-        securityCard.addView(fullNotifications);
-        hiddenNotifications.setChecked(record.notificationPrivacy == AgramContainerManager.NOTIFICATION_HIDDEN);
-        authorNotifications.setChecked(record.notificationPrivacy == AgramContainerManager.NOTIFICATION_AUTHOR);
-        fullNotifications.setChecked(record.notificationPrivacy == AgramContainerManager.NOTIFICATION_FULL);
+        card.addView(pinField, LayoutHelper.createLinear(-1, 52));
+        biometricSwitch = settingSwitch(context, "Биометрия после настройки PIN", record.biometricEnabled);
+        card.addView(biometricSwitch);
+        card.addView(sectionLabel(context, "УВЕДОМЛЕНИЯ"), LayoutHelper.createLinear(-1, -2, 0, 12, 0, 0));
+        hiddenNotifications = radio(context, "Скрытые", "Только Agram и факт нового сообщения.");
+        authorNotifications = radio(context, "Только автор", "Без текста и вложений.");
+        fullNotifications = radio(context, "Полные", "Стандартный текст и доступные превью.");
+        card.addView(hiddenNotifications);
+        card.addView(authorNotifications);
+        card.addView(fullNotifications);
         hiddenNotifications.setOnClickListener(v -> selectNotificationPrivacy(AgramContainerManager.NOTIFICATION_HIDDEN));
         authorNotifications.setOnClickListener(v -> selectNotificationPrivacy(AgramContainerManager.NOTIFICATION_AUTHOR));
         fullNotifications.setOnClickListener(v -> selectNotificationPrivacy(AgramContainerManager.NOTIFICATION_FULL));
-
-        TextView note = text(
-                context,
-                "Ключ контейнера создаётся в Android Keystore. Auth keys, база, кэш и настройки этого аккаунта не используются другими контейнерами.",
-                13,
-                Theme.key_windowBackgroundWhiteGrayText,
-                false
-        );
+        selectNotificationPrivacy(record.notificationPrivacy);
+        TextView note = text(context,
+                "Auth keys, Telegram-сессия, БД, настройки, поиск, черновики, proxy, push и локальные ключи разделены штатным account namespace и ключом контейнера в Android Keystore.",
+                12, Theme.key_windowBackgroundWhiteGrayText, false);
         note.setLineSpacing(AndroidUtilities.dp(2), 1f);
-        securityCard.addView(note, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 8, 0, 0));
-
-        Space space = new Space(context);
-        content.addView(space, LayoutHelper.createLinear(1, 8));
-
-        TextView continueButton = text(
-                context,
-                activeContainer
-                        ? "СОХРАНИТЬ НАСТРОЙКИ"
-                        : (record.profileLocked ? "ПРОДОЛЖИТЬ ПОВТОРНЫЙ ВХОД" : "СОЗДАТЬ И ДОБАВИТЬ АККАУНТ"),
-                14,
-                Theme.key_featuredStickers_buttonText,
-                true
-        );
-        continueButton.setGravity(Gravity.CENTER);
-        continueButton.setBackground(rounded(Theme.getColor(Theme.key_featuredStickers_addButton), 12));
-        continueButton.setOnClickListener(v -> continueToLogin());
-        content.addView(continueButton, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 52));
-
-        if (record.profileLocked) {
-            minimalProfile.setEnabled(false);
-            compatibleProfile.setEnabled(false);
-            customProfile.setEnabled(false);
-            deviceModelField.setEnabled(false);
-            systemVersionField.setEnabled(false);
-            appVersionField.setEnabled(false);
-            detectProfileButton.setEnabled(false);
-            detectProfileButton.setAlpha(.5f);
-            if (!activeContainer) {
-                nameField.setEnabled(false);
-                pinField.setVisibility(View.GONE);
-                biometricSwitch.setEnabled(false);
-                hiddenNotifications.setEnabled(false);
-                authorNotifications.setEnabled(false);
-                fullNotifications.setEnabled(false);
-            }
-        }
-        selectProfileMode(record.profileMode);
-        updatePreview();
-        return fragmentView;
+        card.addView(note, LayoutHelper.createLinear(-1, -2, 0, 8, 0, 0));
     }
 
-    private void continueToLogin() {
-        boolean activeContainer = UserConfig.getInstance(account).isClientActivated();
+    private void saveAndContinue() {
         String pin = pinField.getText().toString();
-        if (!TextUtils.isEmpty(pin) && pin.length() < 6) {
-            Toast.makeText(getParentActivity(), "PIN должен содержать не менее 6 символов", Toast.LENGTH_SHORT).show();
-            return;
+        if (!TextUtils.isEmpty(pin) && pin.length() < 6) { toast("PIN должен содержать не менее 6 символов"); return; }
+        if (biometricSwitch.isChecked() && TextUtils.isEmpty(pin) && !record.hasPin()) { toast("Сначала задайте PIN контейнера"); return; }
+        int mode = selectedProfileMode();
+        if (!record.profileLocked && mode == AgramContainerManager.PROFILE_CUSTOM
+                && (TextUtils.isEmpty(deviceModelField.getText().toString().trim())
+                || TextUtils.isEmpty(systemVersionField.getText().toString().trim()))) {
+            toast("Заполните модель устройства и версию Android"); return;
         }
-        if (activeContainer) {
-            if (biometricSwitch.isChecked() && TextUtils.isEmpty(pin) && !record.hasPin()) {
-                Toast.makeText(getParentActivity(), "Сначала задайте PIN контейнера", Toast.LENGTH_SHORT).show();
-                return;
-            }
+        String networkMode = selectedNetworkMode();
+        int proxyPort = parsePort(proxyPortField.getText().toString());
+        if (AgramContainerManager.NETWORK_PROXY.equals(networkMode)
+                && (TextUtils.isEmpty(proxyAddressField.getText().toString().trim()) || proxyPort == 0)) {
+            toast("Укажите корректные адрес и порт прокси"); return;
+        }
+        if (AgramContainerManager.NETWORK_TOR.equals(networkMode)
+                && !AgramNetworkController.getInstance().isOrbotInstalled()) {
+            toast("Для Tor установите Orbot или выберите другой маршрут"); return;
+        }
+        String pushMode = selectedPushMode();
+        if (AgramContainerManager.PUSH_UNIFIED.equals(pushMode)
+                && TextUtils.isEmpty(selectedDistributor)
+                && AgramUnifiedPushController.getInstance().getAvailableDistributors(getParentActivity()).size() != 1) {
+            toast("Выберите установленный UnifiedPush-дистрибьютор или прямой push"); return;
+        }
+
+        if (!record.profileLocked) {
+            AgramContainerManager.getInstance().updatePreLoginProfile(
+                    account, mode, pendingPresetIndex,
+                    deviceModelField.getText().toString(), systemVersionField.getText().toString(),
+                    systemLanguage(), clientLanguage(), false, timezoneOffset(), pendingProfileId,
+                    pin, biometricSwitch.isChecked() && !TextUtils.isEmpty(pin), selectedNotificationPrivacy());
+        } else {
             AgramContainerManager.getInstance().updateContainerSecurity(
-                    account,
-                    nameField.getText().toString(),
-                    pin,
-                    biometricSwitch.isChecked(),
-                    selectedNotificationPrivacy()
-            );
-            saveGhostMode();
-            Toast.makeText(getParentActivity(), "Настройки контейнера сохранены", Toast.LENGTH_SHORT).show();
+                    account, record.name, pin, biometricSwitch.isChecked(), selectedNotificationPrivacy());
+        }
+        saveGhostMode();
+        AgramContainerManager.getInstance().saveNetworkSettings(
+                account, networkMode, killSwitch.isChecked(),
+                proxyAddressField.getText().toString(), proxyPort,
+                proxyUsernameField.getText().toString(), proxyPasswordField.getText().toString(),
+                proxySecretField.getText().toString());
+
+        if (AgramContainerManager.PUSH_DIRECT.equals(pushMode)
+                && AgramContainerManager.PUSH_UNIFIED.equals(record.pushMode)) {
+            AgramUnifiedPushController.getInstance().unregisterAccount(account, activeContainer);
+        }
+        AgramContainerManager.getInstance().savePushSettings(account, pushMode, selectedDistributor);
+        if (AgramContainerManager.PUSH_UNIFIED.equals(pushMode)
+                && !AgramUnifiedPushController.getInstance().registerAccount(account, selectedDistributor)) {
+            toast("UnifiedPush-дистрибьютор недоступен"); return;
+        }
+        AgramNetworkController.getInstance().apply(account);
+
+        if (activeContainer) {
+            toast("Настройки контейнера сохранены");
             finishFragment();
             return;
         }
-        if (!record.profileLocked) {
-            int mode = selectedProfileMode();
-            if (mode == AgramContainerManager.PROFILE_CUSTOM
-                    && (TextUtils.isEmpty(deviceModelField.getText().toString().trim())
-                    || TextUtils.isEmpty(systemVersionField.getText().toString().trim())
-                    || TextUtils.isEmpty(appVersionField.getText().toString().trim()))) {
-                Toast.makeText(getParentActivity(), "Заполните все три поля профиля устройства", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            AgramContainerManager.getInstance().updatePreLoginProfile(
-                    account,
-                    nameField.getText().toString(),
-                    record.color,
-                    mode,
-                    deviceModelField.getText().toString(),
-                    systemVersionField.getText().toString(),
-                    appVersionField.getText().toString(),
-                    Locale.getDefault().getLanguage(),
-                    false,
-                    TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000,
-                    pin,
-                    biometricSwitch.isChecked() && !TextUtils.isEmpty(pin),
-                    selectedNotificationPrivacy()
-            );
-        }
-        saveGhostMode();
         boolean hasActiveAccount = false;
         for (int slot = 0; slot < UserConfig.MAX_ACCOUNT_COUNT; slot++) {
-            if (UserConfig.getInstance(slot).isClientActivated()) {
-                hasActiveAccount = true;
-                break;
-            }
+            if (UserConfig.getInstance(slot).isClientActivated()) { hasActiveAccount = true; break; }
         }
         if (hasActiveAccount) {
             presentFragment(new LoginActivity(account), true);
         } else {
-            // The normal first-login branch must own the selected slot. Treating
-            // it as "add account" leaves the app on Intro after authorization.
             UserConfig.selectedAccount = account;
             UserConfig.getInstance(0).saveConfig(false);
             presentFragment(new LoginActivity(), true);
         }
     }
 
-    private void showContainerPicker() {
-        java.util.ArrayList<Integer> slots = new java.util.ArrayList<>();
-        java.util.ArrayList<CharSequence> labels = new java.util.ArrayList<>();
-        int firstFreeSlot = -1;
-        for (int slot = 0; slot < UserConfig.MAX_ACCOUNT_COUNT; slot++) {
-            AgramContainerManager.ContainerRecord candidate = AgramContainerManager.getInstance().getContainer(slot);
-            if (candidate == null) {
-                if (firstFreeSlot == -1) {
-                    firstFreeSlot = slot;
-                }
-                continue;
-            }
-            slots.add(slot);
-            String state;
-            if (UserConfig.getInstance(slot).isClientActivated()) {
-                state = "активен";
-            } else if (candidate.profileLocked) {
-                state = "сессия завершена · доступен повторный вход";
-            } else {
-                state = "подготовлен к входу";
-            }
-            labels.add((slot == account ? "✓ " : "") + (slot + 1) + ". " + candidate.name + "\n" + state);
-        }
-        if (firstFreeSlot != -1) {
-            slots.add(firstFreeSlot);
-            labels.add("＋ Новый контейнер " + (firstFreeSlot + 1));
+    private void showPresetPicker() {
+        CharSequence[] labels = new CharSequence[AgramContainerManager.getProfilePresetCount()];
+        for (int i = 0; i < labels.length; i++) {
+            AgramContainerManager.ProfilePreset preset = AgramContainerManager.getProfilePreset(i);
+            labels[i] = (i == pendingPresetIndex ? "✓ " : "") + preset.title
+                    + "\n" + preset.deviceModel + " · " + preset.systemVersion;
         }
         new AlertDialog.Builder(getParentActivity())
-                .setTitle("Выберите контейнер")
-                .setItems(labels.toArray(new CharSequence[0]), (dialog, which) -> {
-                    int selectedSlot = slots.get(which);
-                    if (selectedSlot != account) {
-                        presentFragment(new AgramContainerSetupActivity(selectedSlot), true);
-                    }
+                .setTitle("Пресет устройства")
+                .setItems(labels, (dialog, which) -> {
+                    pendingPresetIndex = which;
+                    pendingProfileId = UUID.randomUUID().toString();
+                    presetButton.setText(presetLabel());
+                    updatePreview();
                 })
                 .setNegativeButton(LocaleController.getString(R.string.Cancel), null)
                 .show();
     }
 
-    private static String containerPickerLabel(int account, AgramContainerManager.ContainerRecord record) {
-        String state = record.profileLocked
-                ? "Сессия завершена — нажмите, чтобы сменить контейнер"
-                : "Нажмите, чтобы выбрать другой или создать новый";
-        return "Контейнер " + (account + 1) + " · " + record.name + "\n" + state;
+    private void regenerateProfile() {
+        int next = new java.security.SecureRandom().nextInt(AgramContainerManager.getProfilePresetCount());
+        if (AgramContainerManager.getProfilePresetCount() > 1 && next == pendingPresetIndex) {
+            next = (next + 1) % AgramContainerManager.getProfilePresetCount();
+        }
+        pendingPresetIndex = next;
+        pendingProfileId = UUID.randomUUID().toString();
+        selectProfileMode(AgramContainerManager.PROFILE_PRESET);
+        presetButton.setText(presetLabel());
+        updatePreview();
+    }
+
+    private void showDistributorPicker() {
+        List<String> distributors = AgramUnifiedPushController.getInstance().getAvailableDistributors(getParentActivity());
+        if (distributors.isEmpty()) { toast("UnifiedPush-дистрибьютор не найден"); return; }
+        CharSequence[] labels = new CharSequence[distributors.size()];
+        for (int i = 0; i < labels.length; i++) {
+            labels[i] = (distributors.get(i).equals(selectedDistributor) ? "✓ " : "") + distributors.get(i);
+        }
+        new AlertDialog.Builder(getParentActivity())
+                .setTitle("UnifiedPush-дистрибьютор")
+                .setItems(labels, (dialog, which) -> {
+                    selectedDistributor = distributors.get(which);
+                    distributorButton.setText(distributorLabel());
+                    updatePreview();
+                })
+                .setNegativeButton(LocaleController.getString(R.string.Cancel), null)
+                .show();
     }
 
     private void updatePreview() {
-        if (preview == null) {
-            return;
-        }
-        int mode = selectedProfileMode();
-        String appVersion = mode == AgramContainerManager.PROFILE_CUSTOM
-                ? profileText(appVersionField, detectedAppVersion())
-                : detectedAppVersion();
-        String release = Build.VERSION.RELEASE;
-        int dot = release == null ? -1 : release.indexOf('.');
-        if (dot > 0) {
-            release = release.substring(0, dot);
-        }
+        if (preview == null) return;
         String model;
         String system;
-        if (mode == AgramContainerManager.PROFILE_MINIMAL) {
-            model = "Agram Android";
-            system = "Android " + release;
-        } else if (mode == AgramContainerManager.PROFILE_CUSTOM) {
+        String previewClientLanguage = clientLanguage();
+        String previewSystemLanguage = systemLanguage();
+        int previewTimezone = timezoneOffset();
+        if (record.profileLocked) {
+            AgramContainerManager.SessionProfile locked = AgramContainerManager.getInstance().resolveSessionProfile(
+                    account, detectedDeviceModel(), detectedSystemVersion(), detectedAppVersion(),
+                    previewClientLanguage, previewSystemLanguage, previewTimezone);
+            model = locked.deviceModel;
+            system = locked.systemVersion;
+            previewClientLanguage = locked.languageCode;
+            previewSystemLanguage = locked.systemLanguageCode;
+            previewTimezone = locked.timezoneOffset;
+        } else if (selectedProfileMode() == AgramContainerManager.PROFILE_CUSTOM) {
             model = profileText(deviceModelField, detectedDeviceModel());
             system = profileText(systemVersionField, detectedSystemVersion());
         } else {
-            model = detectedDeviceModel();
-            system = detectedSystemVersion();
+            AgramContainerManager.ProfilePreset preset = AgramContainerManager.getProfilePreset(pendingPresetIndex);
+            model = preset.deviceModel;
+            system = preset.systemVersion;
         }
-        String language = LocaleController.getSystemLocaleStringIso639().toLowerCase(Locale.US);
-        int timezone = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000;
+        String endpoint = TextUtils.isEmpty(record.unifiedPushEndpoint) ? "pending" : record.unifiedPushEndpoint;
         preview.setText(
-                "device_model: " + model +
+                "ПЕРЕДАЁТСЯ TELEGRAM\n" +
+                        "device_model: " + model +
                         "\nplatform: android" +
                         "\nsystem_version: " + system +
-                        "\napp_version: " + appVersion +
-                        "\nlang_code: " + language +
-                        "\ntz_offset: " + timezone
-        );
+                        "\napp_version: " + detectedAppVersion() +
+                        "\napi_id: " + BuildVars.APP_ID +
+                        "\nlang_code: " + previewClientLanguage +
+                        "\nsystem_lang_code: " + previewSystemLanguage +
+                        "\ntz_offset: " + previewTimezone +
+                        "\nofficial_app: определяется Telegram (не подделывается)" +
+                        "\n\nЛОКАЛЬНО / ТРАНСПОРТ\n" +
+                        "profile_id: " + pendingProfileId +
+                        "\nnetwork: " + selectedNetworkMode() + (killSwitch != null && killSwitch.isChecked() ? " · fail-closed" : "") +
+                        "\npush: " + selectedPushMode() +
+                        "\npush_instance: " + record.unifiedPushInstance +
+                        (AgramContainerManager.PUSH_UNIFIED.equals(selectedPushMode()) ? "\nendpoint: " + endpoint : ""));
+    }
+
+    private void applyLockedProfileState() {
+        if (!record.profileLocked) return;
+        presetProfile.setEnabled(false);
+        customProfile.setEnabled(false);
+        presetButton.setEnabled(false);
+        presetButton.setAlpha(.5f);
+        regenerateButton.setEnabled(false);
+        regenerateButton.setAlpha(.5f);
+        deviceModelField.setEnabled(false);
+        systemVersionField.setEnabled(false);
     }
 
     private void selectProfileMode(int mode) {
-        int normalized = mode == AgramContainerManager.PROFILE_COMPATIBLE
-                || mode == AgramContainerManager.PROFILE_CUSTOM
-                ? mode
-                : AgramContainerManager.PROFILE_MINIMAL;
-        minimalProfile.setChecked(normalized == AgramContainerManager.PROFILE_MINIMAL);
-        compatibleProfile.setChecked(normalized == AgramContainerManager.PROFILE_COMPATIBLE);
-        customProfile.setChecked(normalized == AgramContainerManager.PROFILE_CUSTOM);
-        customProfileFields.setVisibility(normalized == AgramContainerManager.PROFILE_CUSTOM ? View.VISIBLE : View.GONE);
+        boolean custom = mode == AgramContainerManager.PROFILE_CUSTOM;
+        customProfile.setChecked(custom);
+        presetProfile.setChecked(!custom);
+        customProfileFields.setVisibility(custom ? View.VISIBLE : View.GONE);
+        presetButton.setVisibility(custom ? View.GONE : View.VISIBLE);
+        regenerateButton.setVisibility(record.profileLocked ? View.GONE : View.VISIBLE);
+        updatePreview();
+    }
+
+    private void selectNetworkMode(String mode) {
+        boolean proxy = AgramContainerManager.NETWORK_PROXY.equals(mode);
+        boolean tor = AgramContainerManager.NETWORK_TOR.equals(mode);
+        directNetwork.setChecked(!proxy && !tor);
+        proxyNetwork.setChecked(proxy);
+        torNetwork.setChecked(tor);
+        proxyFields.setVisibility(proxy ? View.VISIBLE : View.GONE);
+        killSwitch.setEnabled(proxy || tor);
+        killSwitch.setAlpha(killSwitch.isEnabled() ? 1f : .5f);
+        if (!proxy && !tor) killSwitch.setChecked(false);
+        else if (tor) killSwitch.setChecked(true);
+        updatePreview();
+    }
+
+    private void selectPushMode(String mode) {
+        boolean unified = AgramContainerManager.PUSH_UNIFIED.equals(mode);
+        unifiedPush.setChecked(unified);
+        directPush.setChecked(!unified);
+        distributorButton.setVisibility(unified ? View.VISIBLE : View.GONE);
         updatePreview();
     }
 
     private int selectedProfileMode() {
-        if (customProfile != null && customProfile.isChecked()) {
-            return AgramContainerManager.PROFILE_CUSTOM;
+        return customProfile != null && customProfile.isChecked()
+                ? AgramContainerManager.PROFILE_CUSTOM : AgramContainerManager.PROFILE_PRESET;
+    }
+
+    private String selectedNetworkMode() {
+        if (torNetwork != null && torNetwork.isChecked()) return AgramContainerManager.NETWORK_TOR;
+        if (proxyNetwork != null && proxyNetwork.isChecked()) return AgramContainerManager.NETWORK_PROXY;
+        return AgramContainerManager.NETWORK_DIRECT;
+    }
+
+    private String selectedPushMode() {
+        return unifiedPush != null && unifiedPush.isChecked()
+                ? AgramContainerManager.PUSH_UNIFIED : AgramContainerManager.PUSH_DIRECT;
+    }
+
+    private void saveGhostMode() {
+        AgramContainerManager.getInstance().updateGhostMode(
+                account, AgramContainerManager.getInstance().isGhostModeEnabled(account),
+                ghostReadSwitch.isChecked(), ghostStoriesSwitch.isChecked(),
+                ghostTypingSwitch.isChecked(), ghostOnlineSwitch.isChecked(),
+                ghostReadOnInteractionSwitch.isChecked(), ghostWarnSwitch.isChecked());
+    }
+
+    private String presetLabel() {
+        AgramContainerManager.ProfilePreset preset = AgramContainerManager.getProfilePreset(pendingPresetIndex);
+        return preset.title + "\n" + preset.deviceModel + " · " + preset.systemVersion;
+    }
+
+    private String distributorLabel() {
+        return TextUtils.isEmpty(selectedDistributor) ? "ВЫБРАТЬ ДИСТРИБЬЮТОР" : "ДИСТРИБЬЮТОР · " + selectedDistributor;
+    }
+
+    private static String clientLanguage() {
+        if (LocaleController.getInstance().getCurrentLocaleInfo() != null) {
+            return normalizeLanguage(LocaleController.getInstance().getCurrentLocaleInfo().shortName);
         }
-        if (compatibleProfile != null && compatibleProfile.isChecked()) {
-            return AgramContainerManager.PROFILE_COMPATIBLE;
-        }
-        return AgramContainerManager.PROFILE_MINIMAL;
+        return normalizeLanguage(Locale.getDefault().toLanguageTag());
     }
 
-    private void fillDetectedProfile() {
-        deviceModelField.setText(detectedDeviceModel());
-        systemVersionField.setText(detectedSystemVersion());
-        appVersionField.setText(detectedAppVersion());
-        deviceModelField.setSelection(deviceModelField.length());
-        updatePreview();
+    private static String systemLanguage() { return normalizeLanguage(Locale.getDefault().toLanguageTag()); }
+
+    private static String normalizeLanguage(String value) {
+        return TextUtils.isEmpty(value) ? "en" : value.trim().toLowerCase(Locale.US).replace('_', '-');
     }
 
-    private String detectedAppVersion() {
-        try {
-            PackageInfo info = getParentActivity().getPackageManager().getPackageInfo(getParentActivity().getPackageName(), 0);
-            return info.versionName + " (" + info.versionCode + ")";
-        } catch (Exception ignore) {
-            return BuildVars.BUILD_VERSION_STRING;
-        }
-    }
+    private static int timezoneOffset() { return TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000; }
 
-    private static String detectedDeviceModel() {
-        String manufacturer = TextUtils.isEmpty(Build.MANUFACTURER) ? "Android" : Build.MANUFACTURER.trim();
-        String model = TextUtils.isEmpty(Build.MODEL) ? "device" : Build.MODEL.trim();
-        if (model.toLowerCase(Locale.US).startsWith(manufacturer.toLowerCase(Locale.US))) {
-            return model;
-        }
-        return manufacturer + " " + model;
-    }
-
-    private static String detectedSystemVersion() {
-        String release = TextUtils.isEmpty(Build.VERSION.RELEASE) ? "unknown" : Build.VERSION.RELEASE;
-        return "Android " + release + " (SDK " + Build.VERSION.SDK_INT + ")";
-    }
-
-    private static String valueOrDetected(String value, String detected) {
-        return TextUtils.isEmpty(value) ? detected : value;
-    }
-
-    private static String profileText(EditText field, String fallback) {
-        if (field == null || TextUtils.isEmpty(field.getText().toString().trim())) {
-            return fallback;
-        }
-        return field.getText().toString().trim();
-    }
-
-    private static EditText profileInput(Context context, String hint, String value) {
-        EditText view = input(context, hint);
-        view.setFilters(new InputFilter[]{new InputFilter.LengthFilter(64)});
-        view.setText(value);
-        view.setSelection(view.length());
-        return view;
+    private int selectedNotificationPrivacy() {
+        if (fullNotifications.isChecked()) return AgramContainerManager.NOTIFICATION_FULL;
+        if (authorNotifications.isChecked()) return AgramContainerManager.NOTIFICATION_AUTHOR;
+        return AgramContainerManager.NOTIFICATION_HIDDEN;
     }
 
     private void selectNotificationPrivacy(int privacy) {
@@ -560,47 +618,70 @@ public class AgramContainerSetupActivity extends BaseFragment {
         fullNotifications.setChecked(privacy == AgramContainerManager.NOTIFICATION_FULL);
     }
 
-    private void saveGhostMode() {
-        AgramContainerManager.getInstance().updateGhostMode(
-                account,
-                AgramContainerManager.getInstance().isGhostModeEnabled(account),
-                ghostReadSwitch.isChecked(),
-                ghostStoriesSwitch.isChecked(),
-                ghostTypingSwitch.isChecked(),
-                ghostOnlineSwitch.isChecked(),
-                ghostReadOnInteractionSwitch.isChecked(),
-                ghostWarnSwitch.isChecked()
-        );
+    private String detectedAppVersion() {
+        try {
+            PackageInfo info = getParentActivity().getPackageManager().getPackageInfo(getParentActivity().getPackageName(), 0);
+            long code = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+            return info.versionName + " (" + code + ")";
+        } catch (Exception ignore) {
+            return BuildVars.BUILD_VERSION_STRING;
+        }
     }
 
-    private void updateGhostControlsEnabled() {
-        boolean readOnInteractionEnabled = ghostReadSwitch.isChecked();
-        ghostReadOnInteractionSwitch.setEnabled(readOnInteractionEnabled);
-        ghostReadOnInteractionSwitch.setAlpha(readOnInteractionEnabled ? 1f : .5f);
+    private static String detectedDeviceModel() {
+        String manufacturer = TextUtils.isEmpty(Build.MANUFACTURER) ? "Android" : Build.MANUFACTURER.trim();
+        String model = TextUtils.isEmpty(Build.MODEL) ? "device" : Build.MODEL.trim();
+        return model.toLowerCase(Locale.US).startsWith(manufacturer.toLowerCase(Locale.US)) ? model : manufacturer + " " + model;
     }
 
-    private int selectedNotificationPrivacy() {
-        if (fullNotifications.isChecked()) {
-            return AgramContainerManager.NOTIFICATION_FULL;
-        }
-        if (authorNotifications.isChecked()) {
-            return AgramContainerManager.NOTIFICATION_AUTHOR;
-        }
-        return AgramContainerManager.NOTIFICATION_HIDDEN;
+    private static String detectedSystemVersion() {
+        String release = TextUtils.isEmpty(Build.VERSION.RELEASE) ? "unknown" : Build.VERSION.RELEASE;
+        return "Android " + release;
+    }
+
+    private static int parsePort(String value) {
+        try {
+            int port = Integer.parseInt(value);
+            return port > 0 && port <= 65535 ? port : 0;
+        } catch (Exception ignore) { return 0; }
+    }
+
+    private void toast(String value) { Toast.makeText(getParentActivity(), value, Toast.LENGTH_LONG).show(); }
+
+    private static String valueOr(String value, String fallback) { return TextUtils.isEmpty(value) ? fallback : value; }
+
+    private static String profileText(EditText field, String fallback) {
+        return field == null || TextUtils.isEmpty(field.getText().toString().trim()) ? fallback : field.getText().toString().trim();
     }
 
     private static LinearLayout card(Context context) {
-        LinearLayout value = new LinearLayout(context);
-        value.setOrientation(LinearLayout.VERTICAL);
-        value.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(14), AndroidUtilities.dp(16), AndroidUtilities.dp(16));
-        value.setBackground(rounded(Theme.getColor(Theme.key_windowBackgroundWhite), 16));
-        return value;
+        LinearLayout view = new LinearLayout(context);
+        view.setOrientation(LinearLayout.VERTICAL);
+        view.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(14), AndroidUtilities.dp(16), AndroidUtilities.dp(16));
+        view.setBackground(rounded(Theme.getColor(Theme.key_windowBackgroundWhite), 16));
+        return view;
     }
 
     private static TextView sectionLabel(Context context, String value) {
         TextView view = text(context, value, 12, Theme.key_windowBackgroundWhiteBlueHeader, true);
         view.setLetterSpacing(.12f);
         view.setPadding(0, 0, 0, AndroidUtilities.dp(8));
+        return view;
+    }
+
+    private static TextView action(Context context, String value) {
+        TextView view = text(context, value, 13, Theme.key_windowBackgroundWhiteBlueText, true);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(AndroidUtilities.dp(10), 0, AndroidUtilities.dp(10), 0);
+        view.setBackground(rounded(Theme.getColor(Theme.key_windowBackgroundGray), 10));
+        return view;
+    }
+
+    private static EditText profileInput(Context context, String hint, String value) {
+        EditText view = input(context, hint);
+        view.setFilters(new InputFilter[]{new InputFilter.LengthFilter(128)});
+        view.setText(value == null ? "" : value);
+        view.setSelection(view.length());
         return view;
     }
 
@@ -622,12 +703,9 @@ public class AgramContainerSetupActivity extends BaseFragment {
         view.setTextSize(15);
         view.setLineSpacing(AndroidUtilities.dp(2), 1f);
         view.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
-        int accent = Theme.getColor(Theme.key_featuredStickers_addButton);
-        int secondary = Theme.getColor(Theme.key_windowBackgroundWhiteGrayText);
         view.setButtonTintList(new ColorStateList(
                 new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
-                new int[]{accent, secondary}
-        ));
+                new int[]{Theme.getColor(Theme.key_featuredStickers_addButton), Theme.getColor(Theme.key_windowBackgroundWhiteGrayText)}));
         view.setPadding(0, AndroidUtilities.dp(4), 0, AndroidUtilities.dp(4));
         return view;
     }
@@ -647,9 +725,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
         view.setText(value);
         view.setTextSize(size);
         view.setTextColor(Theme.getColor(colorKey));
-        if (bold) {
-            view.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        }
+        if (bold) view.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         return view;
     }
 

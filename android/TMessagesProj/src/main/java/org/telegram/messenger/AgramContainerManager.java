@@ -35,6 +35,13 @@ public final class AgramContainerManager {
     public static final int PROFILE_COMPATIBLE = 0;
     public static final int PROFILE_MINIMAL = 1;
     public static final int PROFILE_CUSTOM = 2;
+    public static final int PROFILE_PRESET = 3;
+
+    public static final String NETWORK_DIRECT = "direct";
+    public static final String NETWORK_PROXY = "custom";
+    public static final String NETWORK_TOR = "tor";
+    public static final String PUSH_DIRECT = "direct";
+    public static final String PUSH_UNIFIED = "unifiedpush";
 
     public static final int NOTIFICATION_HIDDEN = 0;
     public static final int NOTIFICATION_AUTHOR = 1;
@@ -43,7 +50,7 @@ public final class AgramContainerManager {
     private static final String REGISTRY = "agram_container_registry";
     private static final String SLOT_PREFIX = "slot_";
     private static final String METADATA_PREFIX = "metadata_";
-    private static final int SCHEMA_VERSION = 2;
+    private static final int SCHEMA_VERSION = 3;
     private static final String LEGACY_DURESS_PREFS = "agram_duress_registry";
     private static final String LEGACY_DURESS_SCOPE = "agram_global_duress_v1";
     private static final String LEGACY_CODES_PURGED = "legacy_false_codes_purged_v2";
@@ -55,6 +62,19 @@ public final class AgramContainerManager {
     private final SecureRandom secureRandom = new SecureRandom();
     private final Object sync = new Object();
     private final SparseArray<ContainerRecord> recordCache = new SparseArray<>();
+
+    private static final ProfilePreset[] PROFILE_PRESETS = {
+            new ProfilePreset("Google Pixel 9", "Pixel 9", "Android 16"),
+            new ProfilePreset("Google Pixel 8", "Pixel 8", "Android 15"),
+            new ProfilePreset("Google Pixel 7", "Pixel 7", "Android 14"),
+            new ProfilePreset("Samsung Galaxy S24", "SM-S921B", "Android 15"),
+            new ProfilePreset("Samsung Galaxy S23", "SM-S911B", "Android 14"),
+            new ProfilePreset("OnePlus 12", "CPH2581", "Android 15"),
+            new ProfilePreset("Xiaomi 14", "Xiaomi 14", "Android 15"),
+            new ProfilePreset("Nothing Phone (2)", "A065", "Android 14"),
+            new ProfilePreset("Fairphone 5", "FP5", "Android 14"),
+            new ProfilePreset("Sony Xperia 1 VI", "XQ-EC54", "Android 15")
+    };
 
     public static AgramContainerManager getInstance() {
         AgramContainerManager local = instance;
@@ -109,25 +129,30 @@ public final class AgramContainerManager {
         }
     }
 
-    public void updatePreLoginProfile(int account, String name, int color, int profileMode,
-                                      String deviceModel, String systemVersion, String appVersion,
-                                      String languageCode, boolean fixedTimezone, int timezoneOffset,
+    public void updatePreLoginProfile(int account, int profileMode, int presetIndex,
+                                      String deviceModel, String systemVersion,
+                                      String systemLanguageCode, String clientLanguageCode,
+                                      boolean fixedTimezone, int timezoneOffset, String profileId,
                                       String pin, boolean biometricEnabled, int notificationPrivacy) {
         synchronized (sync) {
             ContainerRecord record = ensureContainer(account);
             if (record.profileLocked) {
                 throw new IllegalStateException("Session profile is already locked for this container");
             }
-            record.name = TextUtils.isEmpty(name) ? defaultName(account) : name.trim();
-            record.color = color;
+            record.name = defaultName(account);
             record.profileMode = normalizeProfileMode(profileMode);
+            record.presetIndex = normalizePresetIndex(presetIndex);
             record.deviceModel = normalizeProfileValue(deviceModel, 64);
             record.systemVersion = normalizeProfileValue(systemVersion, 64);
-            record.appVersion = normalizeProfileValue(appVersion, 64);
-            record.languageCode = normalizeLanguage(languageCode);
+            // appVersion is deliberately not user-controlled. It is resolved
+            // from the installed package each time initConnection is built.
+            record.appVersion = "";
+            record.systemLanguageCode = normalizeLanguage(systemLanguageCode);
+            record.clientLanguageCode = normalizeLanguage(clientLanguageCode);
+            record.languageCode = record.clientLanguageCode;
             record.fixedTimezone = fixedTimezone;
             record.timezoneOffset = fixedTimezone ? timezoneOffset : systemTimezoneOffset();
-            record.profileId = UUID.randomUUID().toString();
+            record.profileId = isUuid(profileId) ? profileId : UUID.randomUUID().toString();
             record.profileGeneratedAt = System.currentTimeMillis();
             record.biometricEnabled = biometricEnabled;
             record.notificationPrivacy = normalizeNotificationPrivacy(notificationPrivacy);
@@ -145,6 +170,22 @@ public final class AgramContainerManager {
         synchronized (sync) {
             ContainerRecord record = ensureContainer(account);
             record.profileLocked = true;
+            saveRecord(record);
+        }
+    }
+
+    /** Unlocks only the pre-login labels after the Telegram session is gone. */
+    public void markLoggedOut(int account) {
+        synchronized (sync) {
+            ContainerRecord record = getContainer(account);
+            if (record == null) {
+                return;
+            }
+            record.profileLocked = false;
+            record.unifiedPushEndpoint = "";
+            record.unifiedPushStatus = "not_registered";
+            record.profileId = UUID.randomUUID().toString();
+            record.profileGeneratedAt = System.currentTimeMillis();
             saveRecord(record);
         }
     }
@@ -295,9 +336,20 @@ public final class AgramContainerManager {
             return new SessionProfile(
                     fallbackProfileValue(record.deviceModel, compatibleDeviceModel),
                     fallbackProfileValue(record.systemVersion, compatibleSystemVersion),
-                    fallbackProfileValue(record.appVersion, appVersion),
-                    normalizeLanguage(record.languageCode),
-                    normalizeLanguage(record.languageCode),
+                    appVersion,
+                    normalizeLanguage(record.clientLanguageCode),
+                    normalizeLanguage(record.systemLanguageCode),
+                    record.fixedTimezone ? record.timezoneOffset : compatibleTimezoneOffset
+            );
+        }
+        if (record.profileMode == PROFILE_PRESET) {
+            ProfilePreset preset = getProfilePreset(record.presetIndex);
+            return new SessionProfile(
+                    preset.deviceModel,
+                    preset.systemVersion,
+                    appVersion,
+                    normalizeLanguage(record.clientLanguageCode),
+                    normalizeLanguage(record.systemLanguageCode),
                     record.fixedTimezone ? record.timezoneOffset : compatibleTimezoneOffset
             );
         }
@@ -338,6 +390,7 @@ public final class AgramContainerManager {
         public int color;
         public long createdAt;
         public int profileMode;
+        public int presetIndex;
         public String deviceModel;
         public String systemVersion;
         public String appVersion;
@@ -345,9 +398,12 @@ public final class AgramContainerManager {
         public long profileGeneratedAt;
         public boolean profileLocked;
         public String languageCode;
+        public String systemLanguageCode;
+        public String clientLanguageCode;
         public boolean fixedTimezone;
         public int timezoneOffset;
         public String proxyMode;
+        public boolean killSwitch;
         public boolean proxyEnabled;
         public String proxyAddress;
         public int proxyPort;
@@ -355,6 +411,10 @@ public final class AgramContainerManager {
         public String proxyPassword;
         public String proxySecret;
         public String pushMode;
+        public String unifiedPushInstance;
+        public String unifiedPushDistributor;
+        public String unifiedPushEndpoint;
+        public String unifiedPushStatus;
         public int notificationPrivacy;
         public String pinSalt;
         public String pinHash;
@@ -376,7 +436,7 @@ public final class AgramContainerManager {
         synchronized (sync) {
             ContainerRecord record = ensureContainer(account);
             record.proxyEnabled = enabled && !TextUtils.isEmpty(address);
-            record.proxyMode = record.proxyEnabled ? "custom" : "direct";
+            record.proxyMode = record.proxyEnabled ? NETWORK_PROXY : NETWORK_DIRECT;
             record.proxyAddress = safe(address);
             record.proxyPort = port > 0 && port <= 65535 ? port : 1080;
             record.proxyUsername = safe(username);
@@ -390,6 +450,8 @@ public final class AgramContainerManager {
         ContainerRecord record = ensureContainer(account);
         return new ProxyProfile(
                 record.proxyEnabled,
+                safe(record.proxyMode),
+                record.killSwitch,
                 safe(record.proxyAddress),
                 record.proxyPort > 0 ? record.proxyPort : 1080,
                 safe(record.proxyUsername),
@@ -417,19 +479,96 @@ public final class AgramContainerManager {
 
     public static final class ProxyProfile {
         public final boolean enabled;
+        public final String mode;
+        public final boolean killSwitch;
         public final String address;
         public final int port;
         public final String username;
         public final String password;
         public final String secret;
 
-        private ProxyProfile(boolean enabled, String address, int port, String username, String password, String secret) {
+        private ProxyProfile(boolean enabled, String mode, boolean killSwitch, String address, int port, String username, String password, String secret) {
             this.enabled = enabled;
+            this.mode = mode;
+            this.killSwitch = killSwitch;
             this.address = address;
             this.port = port;
             this.username = username;
             this.password = password;
             this.secret = secret;
+        }
+    }
+
+    public void saveNetworkSettings(int account, String mode, boolean killSwitch,
+                                    String address, int port, String username,
+                                    String password, String secret) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            String normalizedMode = normalizeNetworkMode(mode);
+            record.proxyMode = normalizedMode;
+            record.killSwitch = killSwitch && !NETWORK_DIRECT.equals(normalizedMode);
+            record.proxyEnabled = !NETWORK_DIRECT.equals(normalizedMode);
+            record.proxyAddress = NETWORK_TOR.equals(normalizedMode) ? "127.0.0.1" : safe(address).trim();
+            record.proxyPort = NETWORK_TOR.equals(normalizedMode) ? 9050 : normalizePort(port);
+            record.proxyUsername = NETWORK_TOR.equals(normalizedMode) ? "" : safe(username);
+            record.proxyPassword = NETWORK_TOR.equals(normalizedMode) ? "" : safe(password);
+            record.proxySecret = NETWORK_TOR.equals(normalizedMode) ? "" : safe(secret);
+            saveRecord(record);
+        }
+    }
+
+    public void savePushSettings(int account, String pushMode, String distributor) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            record.pushMode = PUSH_UNIFIED.equals(pushMode) ? PUSH_UNIFIED : PUSH_DIRECT;
+            record.unifiedPushDistributor = safe(distributor);
+            if (!PUSH_UNIFIED.equals(record.pushMode)) {
+                record.unifiedPushEndpoint = "";
+                record.unifiedPushStatus = "direct";
+            }
+            saveRecord(record);
+        }
+    }
+
+    public void saveUnifiedPushEndpoint(int account, String endpoint, String status) {
+        synchronized (sync) {
+            ContainerRecord record = ensureContainer(account);
+            record.unifiedPushEndpoint = safe(endpoint);
+            record.unifiedPushStatus = safe(status);
+            saveRecord(record);
+        }
+    }
+
+    public int findAccountByUnifiedPushInstance(String instance) {
+        if (TextUtils.isEmpty(instance)) {
+            return -1;
+        }
+        for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
+            ContainerRecord record = getContainer(account);
+            if (record != null && instance.equals(record.unifiedPushInstance)) {
+                return account;
+            }
+        }
+        return -1;
+    }
+
+    public static int getProfilePresetCount() {
+        return PROFILE_PRESETS.length;
+    }
+
+    public static ProfilePreset getProfilePreset(int index) {
+        return PROFILE_PRESETS[normalizePresetIndex(index)];
+    }
+
+    public static final class ProfilePreset {
+        public final String title;
+        public final String deviceModel;
+        public final String systemVersion;
+
+        private ProfilePreset(String title, String deviceModel, String systemVersion) {
+            this.title = title;
+            this.deviceModel = deviceModel;
+            this.systemVersion = systemVersion;
         }
     }
 
@@ -440,7 +579,8 @@ public final class AgramContainerManager {
         record.name = defaultName(account);
         record.color = defaultColor(account);
         record.createdAt = System.currentTimeMillis();
-        record.profileMode = PROFILE_MINIMAL;
+        record.profileMode = PROFILE_PRESET;
+        record.presetIndex = secureRandom.nextInt(PROFILE_PRESETS.length);
         record.deviceModel = "";
         record.systemVersion = "";
         record.appVersion = "";
@@ -448,16 +588,24 @@ public final class AgramContainerManager {
         record.profileGeneratedAt = System.currentTimeMillis();
         record.profileLocked = UserConfig.getInstance(account).isClientActivated();
         record.languageCode = normalizeLanguage(Locale.getDefault().getLanguage());
+        record.systemLanguageCode = normalizeLanguage(Locale.getDefault().toLanguageTag());
+        record.clientLanguageCode = normalizeLanguage(LocaleController.getInstance().getCurrentLocaleInfo() != null
+                ? LocaleController.getInstance().getCurrentLocaleInfo().shortName : Locale.getDefault().toLanguageTag());
         record.timezoneOffset = systemTimezoneOffset();
-        SharedPreferences global = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Context.MODE_PRIVATE);
-        record.proxyAddress = global.getString("proxy_ip", "");
-        record.proxyPort = global.getInt("proxy_port", 1080);
-        record.proxyUsername = global.getString("proxy_user", "");
-        record.proxyPassword = global.getString("proxy_pass", "");
-        record.proxySecret = global.getString("proxy_secret", "");
-        record.proxyEnabled = global.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(record.proxyAddress);
-        record.proxyMode = record.proxyEnabled ? "custom" : "direct";
-        record.pushMode = "none";
+        // A new account must never inherit another container's legacy proxy.
+        record.proxyAddress = "";
+        record.proxyPort = 1080;
+        record.proxyUsername = "";
+        record.proxyPassword = "";
+        record.proxySecret = "";
+        record.proxyEnabled = false;
+        record.proxyMode = NETWORK_DIRECT;
+        record.killSwitch = false;
+        record.pushMode = PUSH_UNIFIED;
+        record.unifiedPushInstance = "agram-" + UUID.randomUUID();
+        record.unifiedPushDistributor = "";
+        record.unifiedPushEndpoint = "";
+        record.unifiedPushStatus = "not_registered";
         record.notificationPrivacy = NOTIFICATION_HIDDEN;
         record.ghostModeEnabled = false;
         record.ghostSuppressReadReceipts = true;
@@ -522,6 +670,7 @@ public final class AgramContainerManager {
         json.put("color", record.color);
         json.put("created_at", record.createdAt);
         json.put("profile_mode", record.profileMode);
+        json.put("preset_index", record.presetIndex);
         json.put("device_model", safe(record.deviceModel));
         json.put("system_version", safe(record.systemVersion));
         json.put("app_version", safe(record.appVersion));
@@ -529,9 +678,12 @@ public final class AgramContainerManager {
         json.put("profile_generated_at", record.profileGeneratedAt);
         json.put("profile_locked", record.profileLocked);
         json.put("language", record.languageCode);
+        json.put("system_language", record.systemLanguageCode);
+        json.put("client_language", record.clientLanguageCode);
         json.put("fixed_timezone", record.fixedTimezone);
         json.put("timezone_offset", record.timezoneOffset);
         json.put("proxy_mode", record.proxyMode);
+        json.put("kill_switch", record.killSwitch);
         json.put("proxy_enabled", record.proxyEnabled);
         json.put("proxy_address", record.proxyAddress);
         json.put("proxy_port", record.proxyPort);
@@ -539,6 +691,10 @@ public final class AgramContainerManager {
         json.put("proxy_password", record.proxyPassword);
         json.put("proxy_secret", record.proxySecret);
         json.put("push_mode", record.pushMode);
+        json.put("unified_push_instance", record.unifiedPushInstance);
+        json.put("unified_push_distributor", record.unifiedPushDistributor);
+        json.put("unified_push_endpoint", record.unifiedPushEndpoint);
+        json.put("unified_push_status", record.unifiedPushStatus);
         json.put("notification_privacy", record.notificationPrivacy);
         json.put("pin_salt", record.pinSalt);
         json.put("pin_hash", record.pinHash);
@@ -565,6 +721,7 @@ public final class AgramContainerManager {
         record.color = json.optInt("color", defaultColor(record.account));
         record.createdAt = json.optLong("created_at", 0);
         record.profileMode = normalizeProfileMode(json.optInt("profile_mode", PROFILE_MINIMAL));
+        record.presetIndex = normalizePresetIndex(json.optInt("preset_index", 0));
         record.deviceModel = normalizeProfileValue(json.optString("device_model", ""), 64);
         record.systemVersion = normalizeProfileValue(json.optString("system_version", ""), 64);
         record.appVersion = normalizeProfileValue(json.optString("app_version", ""), 64);
@@ -572,16 +729,23 @@ public final class AgramContainerManager {
         record.profileGeneratedAt = json.optLong("profile_generated_at", record.createdAt);
         record.profileLocked = json.optBoolean("profile_locked", false);
         record.languageCode = normalizeLanguage(json.optString("language", "en"));
+        record.systemLanguageCode = normalizeLanguage(json.optString("system_language", record.languageCode));
+        record.clientLanguageCode = normalizeLanguage(json.optString("client_language", record.languageCode));
         record.fixedTimezone = json.optBoolean("fixed_timezone", false);
         record.timezoneOffset = json.optInt("timezone_offset", systemTimezoneOffset());
         record.proxyMode = json.optString("proxy_mode", "direct");
+        record.killSwitch = json.optBoolean("kill_switch", false);
         record.proxyEnabled = json.optBoolean("proxy_enabled", false);
         record.proxyAddress = json.optString("proxy_address", "");
         record.proxyPort = json.optInt("proxy_port", 1080);
         record.proxyUsername = json.optString("proxy_username", "");
         record.proxyPassword = json.optString("proxy_password", "");
         record.proxySecret = json.optString("proxy_secret", "");
-        record.pushMode = json.optString("push_mode", "none");
+        record.pushMode = json.optString("push_mode", PUSH_UNIFIED);
+        record.unifiedPushInstance = json.optString("unified_push_instance", "agram-" + UUID.randomUUID());
+        record.unifiedPushDistributor = json.optString("unified_push_distributor", "");
+        record.unifiedPushEndpoint = json.optString("unified_push_endpoint", "");
+        record.unifiedPushStatus = json.optString("unified_push_status", "not_registered");
         record.notificationPrivacy = normalizeNotificationPrivacy(json.optInt("notification_privacy", NOTIFICATION_HIDDEN));
         record.pinSalt = nullable(json, "pin_salt");
         record.pinHash = nullable(json, "pin_hash");
@@ -663,7 +827,7 @@ public final class AgramContainerManager {
             return "en";
         }
         String normalized = value.trim().toLowerCase(Locale.US).replace('_', '-');
-        return normalized.matches("[a-z]{2,3}(-[a-z0-9]{2,8})?") ? normalized : "en";
+        return normalized.matches("[a-z]{2,3}(-[a-z0-9]{2,8})*") ? normalized : "en";
     }
 
     private static int normalizeNotificationPrivacy(int value) {
@@ -674,10 +838,37 @@ public final class AgramContainerManager {
     }
 
     private static int normalizeProfileMode(int value) {
-        if (value == PROFILE_COMPATIBLE || value == PROFILE_CUSTOM) {
+        if (value == PROFILE_COMPATIBLE || value == PROFILE_CUSTOM || value == PROFILE_PRESET) {
             return value;
         }
         return PROFILE_MINIMAL;
+    }
+
+    private static int normalizePresetIndex(int value) {
+        return value >= 0 && value < PROFILE_PRESETS.length ? value : 0;
+    }
+
+    private static String normalizeNetworkMode(String value) {
+        if (NETWORK_PROXY.equals(value) || NETWORK_TOR.equals(value)) {
+            return value;
+        }
+        return NETWORK_DIRECT;
+    }
+
+    private static int normalizePort(int value) {
+        return value > 0 && value <= 65535 ? value : 1080;
+    }
+
+    private static boolean isUuid(String value) {
+        if (TextUtils.isEmpty(value)) {
+            return false;
+        }
+        try {
+            UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException ignore) {
+            return false;
+        }
     }
 
     private static String normalizeProfileValue(String value, int maxLength) {

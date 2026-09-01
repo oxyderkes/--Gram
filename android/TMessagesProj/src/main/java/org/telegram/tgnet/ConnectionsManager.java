@@ -25,6 +25,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AgramContainerManager;
+import org.telegram.messenger.AgramNetworkController;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.BaseController;
@@ -688,12 +689,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     public void init(int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection) {
-        AgramContainerManager.ProxyProfile proxy = AgramContainerManager.getInstance().getProxyProfile(currentAccount);
-        if (proxy.enabled && !TextUtils.isEmpty(proxy.address)) {
-            native_setProxySettings(currentAccount, proxy.address, proxy.port, proxy.username, proxy.password, proxy.secret);
-        } else {
-            native_setProxySettings(currentAccount, "", 1080, "", "", "");
-        }
+        AgramNetworkController.getInstance().prepare(currentAccount);
         String installer = "";
         try {
             Context context = ApplicationLoader.applicationContext;
@@ -947,7 +943,10 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void onProxyError() {
-        AndroidUtilities.runOnUIThread(() -> NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.needShowAlert, 3));
+        AndroidUtilities.runOnUIThread(() -> {
+            AgramNetworkController.getInstance().onProxyError();
+            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.needShowAlert, 3);
+        });
     }
 
     public static void getHostByName(String hostName, long address) {
@@ -1015,11 +1014,7 @@ public class ConnectionsManager extends BaseController {
         int account = UserConfig.selectedAccount;
         AgramContainerManager.getInstance().saveProxySettings(
                 account, enabled, address, port, username, password, secret);
-        if (enabled && !TextUtils.isEmpty(address)) {
-            native_setProxySettings(account, address, port, username, password, secret);
-        } else {
-            native_setProxySettings(account, "", 1080, "", "", "");
-        }
+        AgramNetworkController.getInstance().apply(account);
         AccountInstance accountInstance = AccountInstance.getInstance(account);
         if (accountInstance.getUserConfig().isClientActivated()) {
             accountInstance.getMessagesController().checkPromoInfo(true);

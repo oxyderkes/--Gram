@@ -1,6 +1,6 @@
 # ά‑Gram source overlay
 
-This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.13` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
+This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.14` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
 
 ## Base source
 
@@ -40,23 +40,25 @@ The resulting APK is under `TMessagesProj_AppStandalone/build/outputs/apk/afat/s
 
 ## Implementation summary
 
-- One named local container per Telegram engine account. Existing installations keep their slot and package identity so sessions can migrate in place; no account shares another account's auth state, database, media namespace, account settings or container key.
+- One automatic local container per Telegram engine account. Existing installations keep their slot and package identity so sessions migrate in place; the startup container picker has been removed.
 - Encrypted container metadata with a random container ID and a distinct AES-256-GCM key generated in Android Keystore.
-- Offline container creation before Telegram authorization, including an exact preview of the session profile. Choose a minimal profile, truthful auto-detection, or a manually entered fixed device/system/client label. Manual fields are encrypted with the container, validated to 64 printable characters and locked after successful login; automatic random rotation is intentionally not implemented.
+- Offline profile creation before Telegram authorization with an exact preview. Choose one of ten standard model/Android presets, generate another preset, or enter a custom model and Android version. The installed Agram version and private production `api_id` remain truthful, and `official_app` is not forged. The profile is locked after login; ending the Telegram session retires that container and frees the slot for a new profile.
 - Optional per-container PIN and biometric gate on account switching. False/legend codes are not included; the v2 metadata migration deletes hashes created by the earlier experimental implementation.
-- Before authorization, the setup screen offers the free account slot and its container profile. A login started after every account has been logged out follows the normal first-login lifecycle instead of the add-account branch.
-- A profile saved after the network singleton has already been created is now re-applied through JNI before authorization. Native datacenter init versions are reset so the next request carries the selected custom `device_model`, `system_version` and `app_version` in a fresh `initConnection`.
+- Before authorization, the next free engine slot receives its container automatically. A login started after every account has been logged out follows the normal first-login lifecycle instead of the add-account branch.
+- A profile saved after the network singleton has already been created is re-applied through JNI before authorization. Native datacenter init versions are reset so the next request carries the selected `device_model` and `system_version`, together with the real installed `app_version`, in a fresh `initConnection`.
 - Per-container Ghost Mode has a master switch directly in the dialogs header, uses a highlighted active state, and applies only to the current container. A long press opens the detailed controls for read-receipt, story-view, typing/recording and online-presence suppression; replies/reactions can require confirmation because server-side interactions may still reveal activity.
 - Automatic chat viewing and explicit read actions use separate paths. While read suppression is active, opening or scrolling through a regular chat does not mutate its local unread state, remove its notification, or send a receipt. The chat-list action and notification action “Mark as read” explicitly clear both local state and the server receipt; optional read-on-interaction does the same after a reply or reaction.
 - Story viewing follows the same local-preservation rule: in Ghost Mode an opened story keeps its unread ring and notification. Opening a story and sending any story reaction use explicit confirmation dialogs.
-- Per-container proxy source of truth and native proxy application; Telegram's legacy proxy screen receives only the selected container's projection.
+- Per-container network source of truth and native proxy application: direct, custom SOCKS5/MTProto proxy, or Tor through Orbot. With kill switch enabled, a proxy error or unavailable Tor pauses only that account's native MTProto engine while its local database remains readable.
+- UnifiedPush connector 3.0.10 integration. Each container owns a random registration instance and a distinct endpoint registered with Telegram as Simple Push type 4; `other_uids` remains empty so accounts are not merged into one token. Direct MTProto push remains available as an explicit fallback.
 - Per-container notification privacy: hide identity, show author only, or use full Telegram previews. The secure default is hidden.
 - 32 stable Java/native engine slots and removal of the Premium account-count gate. Containers provide isolation and lifecycle management over those bounded engine instances; they do not turn the native engine into an unbounded process pool.
 - Staggered lightweight connections for background accounts and lazy initialization of heavy Java controllers on selection.
 - Re-entrancy protection during account switching and sparse-slot-safe notification media handling.
 - Account selectors contain active sessions only. Ended, blocked and revoked sessions are removed during logout or migration, and their account slot becomes immediately reusable instead of leaving a non-actionable local card.
 - Separate package, account types, MIME types, shortcuts, broadcast actions, app name and launcher icon.
-- Standalone direct-push foreground service for use without Google Play Services.
+- Standalone direct-push foreground service for use without Google Play Services, plus optional UnifiedPush distributor support.
+- Android direct-share conversation shortcuts are disabled to avoid exposing a dialog from another container. On Android 13+ Recent Apps screenshots are disabled without blocking ordinary in-app screenshots.
 - arm64-only Pixel/GrapheneOS flavor and project-specific signing configuration.
 - Telegram API credentials are read from private build settings. Public/test fallback credentials are rejected by the build.
 - Minimum Android version is API 26. Sensitive Android backup is disabled, and legacy phone/SMS/call-log, overlay and background-location permissions were removed; self-update permission remains only in the standalone distribution manifest.

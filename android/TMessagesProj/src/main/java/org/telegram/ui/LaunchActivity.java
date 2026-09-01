@@ -100,6 +100,7 @@ import com.google.firebase.appindexing.builders.AssistActionBuilder;
 import org.telegram.PhoneFormat.PhoneFormat;
 import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AgramContainerManager;
+import org.telegram.messenger.AgramNetworkController;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.AnimationNotificationsLocker;
 import org.telegram.messenger.ApplicationLoader;
@@ -401,6 +402,11 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     protected void onCreate(Bundle savedInstanceState) {
         isActive = true;
         activeInstanceCount++;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Keep the active container out of the OS Recent Apps snapshot
+            // without disabling normal in-app screenshots.
+            setRecentsScreenshotEnabled(false);
+        }
         if (BuildVars.DEBUG_VERSION) {
             StrictMode.setVmPolicy(new StrictMode.VmPolicy.Builder(StrictMode.getVmPolicy())
                 .detectLeakedClosableObjects()
@@ -1276,6 +1282,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             UserConfig.selectedAccount = account;
             UserConfig.getInstance(0).saveConfig(false);
             AgramContainerManager.getInstance().publishProxyForSelectedContainer(account);
+            AgramNetworkController.getInstance().apply(account);
 
         checkCurrentAccount();
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.activeAccountChanged, account);

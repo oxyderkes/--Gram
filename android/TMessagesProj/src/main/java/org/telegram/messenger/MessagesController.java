@@ -16254,6 +16254,7 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void performLogout(int type, boolean preserveBlockedAccount) {
+        AgramUnifiedPushController.getInstance().unregisterAccount(currentAccount, true);
         if (type == 1) {
             unregistedPush();
             TLRPC.TL_auth_logOut req = new TLRPC.TL_auth_logOut();
@@ -16271,6 +16272,10 @@ public class MessagesController extends BaseController implements NotificationCe
             getConnectionsManager().cleanup(type == 2);
         }
         getUserConfig().clearConfig(preserveBlockedAccount);
+        // A Telegram account owns its container for exactly the lifetime of
+        // that session. A later login in the freed engine slot receives a new
+        // random container id, Keystore key, push instance and device profile.
+        AgramContainerManager.getInstance().deleteContainer(currentAccount);
         SharedPrefsHelper.cleanupAccount(currentAccount);
 
         boolean shouldHandle = true;
@@ -16348,6 +16353,40 @@ public class MessagesController extends BaseController implements NotificationCe
             }
             AndroidUtilities.runOnUIThread(() -> registeringForPush = false);
         });
+    }
+
+    /** Registers the per-container Simple Push endpoint documented by Telegram. */
+    public void registerAgramUnifiedPush(String endpoint) {
+        if (TextUtils.isEmpty(endpoint) || getUserConfig().getClientUserId() == 0) {
+            return;
+        }
+        TL_account.registerDevice req = new TL_account.registerDevice();
+        req.token_type = 4;
+        req.token = endpoint;
+        req.app_sandbox = false;
+        req.no_muted = false;
+        req.secret = new byte[0];
+        // Every Agram container owns a different endpoint. Do not merge users
+        // through other_uids, which would defeat container isolation.
+        getConnectionsManager().sendRequest(req, (response, error) -> {
+            if (response instanceof TLRPC.TL_boolTrue) {
+                AgramContainerManager.getInstance().saveUnifiedPushEndpoint(
+                        currentAccount, endpoint, "registered");
+            } else {
+                AgramContainerManager.getInstance().saveUnifiedPushEndpoint(
+                        currentAccount, endpoint, "telegram_error");
+            }
+        });
+    }
+
+    public void unregisterAgramUnifiedPush(String endpoint) {
+        if (TextUtils.isEmpty(endpoint) || getUserConfig().getClientUserId() == 0) {
+            return;
+        }
+        TL_account.unregisterDevice req = new TL_account.unregisterDevice();
+        req.token_type = 4;
+        req.token = endpoint;
+        getConnectionsManager().sendRequest(req, null);
     }
 
     public void loadCurrentState() {
