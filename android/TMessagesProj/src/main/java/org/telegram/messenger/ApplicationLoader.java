@@ -354,7 +354,7 @@ public class ApplicationLoader extends Application {
 
         ApplicationLoader app = (ApplicationLoader) ApplicationLoader.applicationContext;
         app.initPushServices();
-        AgramUnifiedPushController.getInstance().restoreActiveRegistrations();
+        AgramPushController.getInstance().restoreActiveRegistrations();
         if (BuildVars.LOGS_ENABLED) {
             FileLog.d("app initied");
         }

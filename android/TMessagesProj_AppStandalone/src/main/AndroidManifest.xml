@@ -3,14 +3,14 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:installLocation="auto">
 
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+
     <application android:name="org.telegram.messenger.ApplicationLoaderImpl" tools:replace="name">
         <service
-            android:name="org.telegram.messenger.AgramUnifiedPushService"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
-            </intent-filter>
-        </service>
+            android:name="org.telegram.messenger.AgramPushService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging"
+            android:stopWithTask="false" />
         <service
             android:name="org.telegram.messenger.GoogleVoiceClientService"
             android:exported="true"

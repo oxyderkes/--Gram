@@ -26,7 +26,7 @@ import android.widget.Toast;
 
 import org.telegram.messenger.AgramContainerManager;
 import org.telegram.messenger.AgramNetworkController;
-import org.telegram.messenger.AgramUnifiedPushController;
+import org.telegram.messenger.AgramPushController;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.LocaleController;
@@ -38,7 +38,6 @@ import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.LayoutHelper;
 
-import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.UUID;
@@ -72,10 +71,8 @@ public class AgramContainerSetupActivity extends BaseFragment {
     private EditText proxySecretField;
     private Switch killSwitch;
 
-    private RadioButton unifiedPush;
+    private RadioButton agramPush;
     private RadioButton directPush;
-    private TextView distributorButton;
-    private String selectedDistributor;
 
     private EditText pinField;
     private Switch biometricSwitch;
@@ -107,10 +104,6 @@ public class AgramContainerSetupActivity extends BaseFragment {
         }
         pendingPresetIndex = record.presetIndex;
         pendingProfileId = TextUtils.isEmpty(record.profileId) ? UUID.randomUUID().toString() : record.profileId;
-        selectedDistributor = TextUtils.isEmpty(record.unifiedPushDistributor)
-                ? AgramUnifiedPushController.getInstance().getCurrentDistributor(
-                        org.telegram.messenger.ApplicationLoader.applicationContext)
-                : record.unifiedPushDistributor;
         return super.onFragmentCreate();
     }
 
@@ -283,17 +276,14 @@ public class AgramContainerSetupActivity extends BaseFragment {
         LinearLayout card = card(context);
         content.addView(card, LayoutHelper.createLinear(-1, -2, 0, 0, 0, 12));
         card.addView(sectionLabel(context, "PUSH ЭТОГО КОНТЕЙНЕРА"));
-        unifiedPush = radio(context, "UnifiedPush", "Отдельный endpoint и instance для этого аккаунта.");
-        directPush = radio(context, "Прямое MTProto-соединение", "Без внешнего push-дистрибьютора.");
-        card.addView(unifiedPush);
+        agramPush = radio(context, "Agram Push", "Встроенная доставка с отдельным endpoint этого контейнера.");
+        directPush = radio(context, "Прямое MTProto-соединение", "Внутренний fallback без push-endpoint.");
+        card.addView(agramPush);
         card.addView(directPush);
-        unifiedPush.setOnClickListener(v -> selectPushMode(AgramContainerManager.PUSH_UNIFIED));
+        agramPush.setOnClickListener(v -> selectPushMode(AgramContainerManager.PUSH_AGRAM));
         directPush.setOnClickListener(v -> selectPushMode(AgramContainerManager.PUSH_DIRECT));
-        distributorButton = action(context, distributorLabel());
-        distributorButton.setOnClickListener(v -> showDistributorPicker());
-        card.addView(distributorButton, LayoutHelper.createLinear(-1, 48, 0, 6, 0, 0));
         TextView note = text(context,
-                "Endpoint хранится в зашифрованной записи контейнера и регистрируется в Telegram как Simple Push type 4 без объединения other_uids.",
+                "Внешнее приложение не требуется. Endpoint хранится в зашифрованной записи контейнера и регистрируется в Telegram как Simple Push type 4 без объединения other_uids. Через SOCKS5/Tor push следует маршруту контейнера и никогда не обходит его напрямую.",
                 12, Theme.key_windowBackgroundWhiteGrayText, false);
         note.setLineSpacing(AndroidUtilities.dp(2), 1f);
         card.addView(note, LayoutHelper.createLinear(-1, -2, 0, 8, 0, 0));
@@ -369,11 +359,6 @@ public class AgramContainerSetupActivity extends BaseFragment {
             toast("Для Tor установите Orbot или выберите другой маршрут"); return;
         }
         String pushMode = selectedPushMode();
-        if (AgramContainerManager.PUSH_UNIFIED.equals(pushMode)
-                && TextUtils.isEmpty(selectedDistributor)
-                && AgramUnifiedPushController.getInstance().getAvailableDistributors(getParentActivity()).size() != 1) {
-            toast("Выберите установленный UnifiedPush-дистрибьютор или прямой push"); return;
-        }
 
         if (!record.profileLocked) {
             AgramContainerManager.getInstance().updatePreLoginProfile(
@@ -393,14 +378,11 @@ public class AgramContainerSetupActivity extends BaseFragment {
                 proxySecretField.getText().toString());
 
         if (AgramContainerManager.PUSH_DIRECT.equals(pushMode)
-                && AgramContainerManager.PUSH_UNIFIED.equals(record.pushMode)) {
-            AgramUnifiedPushController.getInstance().unregisterAccount(account, activeContainer);
+                && AgramContainerManager.PUSH_AGRAM.equals(record.pushMode)) {
+            AgramPushController.getInstance().unregisterAccount(account, activeContainer);
         }
-        AgramContainerManager.getInstance().savePushSettings(account, pushMode, selectedDistributor);
-        if (AgramContainerManager.PUSH_UNIFIED.equals(pushMode)
-                && !AgramUnifiedPushController.getInstance().registerAccount(account, selectedDistributor)) {
-            toast("UnifiedPush-дистрибьютор недоступен"); return;
-        }
+        AgramContainerManager.getInstance().savePushSettings(account, pushMode);
+        AgramPushController.getInstance().onPushSettingsChanged(account);
         AgramNetworkController.getInstance().apply(account);
 
         if (activeContainer) {
@@ -452,24 +434,6 @@ public class AgramContainerSetupActivity extends BaseFragment {
         updatePreview();
     }
 
-    private void showDistributorPicker() {
-        List<String> distributors = AgramUnifiedPushController.getInstance().getAvailableDistributors(getParentActivity());
-        if (distributors.isEmpty()) { toast("UnifiedPush-дистрибьютор не найден"); return; }
-        CharSequence[] labels = new CharSequence[distributors.size()];
-        for (int i = 0; i < labels.length; i++) {
-            labels[i] = (distributors.get(i).equals(selectedDistributor) ? "✓ " : "") + distributors.get(i);
-        }
-        new AlertDialog.Builder(getParentActivity())
-                .setTitle("UnifiedPush-дистрибьютор")
-                .setItems(labels, (dialog, which) -> {
-                    selectedDistributor = distributors.get(which);
-                    distributorButton.setText(distributorLabel());
-                    updatePreview();
-                })
-                .setNegativeButton(LocaleController.getString(R.string.Cancel), null)
-                .show();
-    }
-
     private void updatePreview() {
         if (preview == null) return;
         String model;
@@ -494,7 +458,8 @@ public class AgramContainerSetupActivity extends BaseFragment {
             model = preset.deviceModel;
             system = preset.systemVersion;
         }
-        String endpoint = TextUtils.isEmpty(record.unifiedPushEndpoint) ? "pending" : record.unifiedPushEndpoint;
+        String endpointStatus = TextUtils.isEmpty(record.agramPushEndpoint)
+                ? "создастся автоматически" : valueOr(record.agramPushStatus, "готов");
         preview.setText(
                 "ПЕРЕДАЁТСЯ TELEGRAM\n" +
                         "device_model: " + model +
@@ -510,8 +475,9 @@ public class AgramContainerSetupActivity extends BaseFragment {
                         "profile_id: " + pendingProfileId +
                         "\nnetwork: " + selectedNetworkMode() + (killSwitch != null && killSwitch.isChecked() ? " · fail-closed" : "") +
                         "\npush: " + selectedPushMode() +
-                        "\npush_instance: " + record.unifiedPushInstance +
-                        (AgramContainerManager.PUSH_UNIFIED.equals(selectedPushMode()) ? "\nendpoint: " + endpoint : ""));
+                        "\npush_instance: " + record.agramPushInstance +
+                        (AgramContainerManager.PUSH_AGRAM.equals(selectedPushMode())
+                                ? "\nendpoint: отдельный · " + endpointStatus : ""));
     }
 
     private void applyLockedProfileState() {
@@ -551,10 +517,9 @@ public class AgramContainerSetupActivity extends BaseFragment {
     }
 
     private void selectPushMode(String mode) {
-        boolean unified = AgramContainerManager.PUSH_UNIFIED.equals(mode);
-        unifiedPush.setChecked(unified);
-        directPush.setChecked(!unified);
-        distributorButton.setVisibility(unified ? View.VISIBLE : View.GONE);
+        boolean embedded = AgramContainerManager.PUSH_AGRAM.equals(mode);
+        agramPush.setChecked(embedded);
+        directPush.setChecked(!embedded);
         updatePreview();
     }
 
@@ -570,8 +535,8 @@ public class AgramContainerSetupActivity extends BaseFragment {
     }
 
     private String selectedPushMode() {
-        return unifiedPush != null && unifiedPush.isChecked()
-                ? AgramContainerManager.PUSH_UNIFIED : AgramContainerManager.PUSH_DIRECT;
+        return agramPush != null && agramPush.isChecked()
+                ? AgramContainerManager.PUSH_AGRAM : AgramContainerManager.PUSH_DIRECT;
     }
 
     private void saveGhostMode() {
@@ -585,10 +550,6 @@ public class AgramContainerSetupActivity extends BaseFragment {
     private String presetLabel() {
         AgramContainerManager.ProfilePreset preset = AgramContainerManager.getProfilePreset(pendingPresetIndex);
         return preset.title + "\n" + preset.deviceModel + " · " + preset.systemVersion;
-    }
-
-    private String distributorLabel() {
-        return TextUtils.isEmpty(selectedDistributor) ? "ВЫБРАТЬ ДИСТРИБЬЮТОР" : "ДИСТРИБЬЮТОР · " + selectedDistributor;
     }
 
     private static String clientLanguage() {

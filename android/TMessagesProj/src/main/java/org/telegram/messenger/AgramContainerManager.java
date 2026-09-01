@@ -41,7 +41,8 @@ public final class AgramContainerManager {
     public static final String NETWORK_PROXY = "custom";
     public static final String NETWORK_TOR = "tor";
     public static final String PUSH_DIRECT = "direct";
-    public static final String PUSH_UNIFIED = "unifiedpush";
+    public static final String PUSH_AGRAM = "agram";
+    private static final String LEGACY_PUSH_UNIFIED = "unifiedpush";
 
     public static final int NOTIFICATION_HIDDEN = 0;
     public static final int NOTIFICATION_AUTHOR = 1;
@@ -50,7 +51,7 @@ public final class AgramContainerManager {
     private static final String REGISTRY = "agram_container_registry";
     private static final String SLOT_PREFIX = "slot_";
     private static final String METADATA_PREFIX = "metadata_";
-    private static final int SCHEMA_VERSION = 3;
+    private static final int SCHEMA_VERSION = 4;
     private static final String LEGACY_DURESS_PREFS = "agram_duress_registry";
     private static final String LEGACY_DURESS_SCOPE = "agram_global_duress_v1";
     private static final String LEGACY_CODES_PURGED = "legacy_false_codes_purged_v2";
@@ -182,8 +183,8 @@ public final class AgramContainerManager {
                 return;
             }
             record.profileLocked = false;
-            record.unifiedPushEndpoint = "";
-            record.unifiedPushStatus = "not_registered";
+            record.agramPushEndpoint = "";
+            record.agramPushStatus = "not_registered";
             record.profileId = UUID.randomUUID().toString();
             record.profileGeneratedAt = System.currentTimeMillis();
             saveRecord(record);
@@ -411,10 +412,9 @@ public final class AgramContainerManager {
         public String proxyPassword;
         public String proxySecret;
         public String pushMode;
-        public String unifiedPushInstance;
-        public String unifiedPushDistributor;
-        public String unifiedPushEndpoint;
-        public String unifiedPushStatus;
+        public String agramPushInstance;
+        public String agramPushEndpoint;
+        public String agramPushStatus;
         public int notificationPrivacy;
         public String pinSalt;
         public String pinHash;
@@ -517,35 +517,34 @@ public final class AgramContainerManager {
         }
     }
 
-    public void savePushSettings(int account, String pushMode, String distributor) {
+    public void savePushSettings(int account, String pushMode) {
         synchronized (sync) {
             ContainerRecord record = ensureContainer(account);
-            record.pushMode = PUSH_UNIFIED.equals(pushMode) ? PUSH_UNIFIED : PUSH_DIRECT;
-            record.unifiedPushDistributor = safe(distributor);
-            if (!PUSH_UNIFIED.equals(record.pushMode)) {
-                record.unifiedPushEndpoint = "";
-                record.unifiedPushStatus = "direct";
+            record.pushMode = PUSH_AGRAM.equals(pushMode) ? PUSH_AGRAM : PUSH_DIRECT;
+            if (!PUSH_AGRAM.equals(record.pushMode)) {
+                record.agramPushEndpoint = "";
+                record.agramPushStatus = "direct";
             }
             saveRecord(record);
         }
     }
 
-    public void saveUnifiedPushEndpoint(int account, String endpoint, String status) {
+    public void saveAgramPushEndpoint(int account, String endpoint, String status) {
         synchronized (sync) {
             ContainerRecord record = ensureContainer(account);
-            record.unifiedPushEndpoint = safe(endpoint);
-            record.unifiedPushStatus = safe(status);
+            record.agramPushEndpoint = safe(endpoint);
+            record.agramPushStatus = safe(status);
             saveRecord(record);
         }
     }
 
-    public int findAccountByUnifiedPushInstance(String instance) {
+    public int findAccountByAgramPushInstance(String instance) {
         if (TextUtils.isEmpty(instance)) {
             return -1;
         }
         for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
             ContainerRecord record = getContainer(account);
-            if (record != null && instance.equals(record.unifiedPushInstance)) {
+            if (record != null && instance.equals(record.agramPushInstance)) {
                 return account;
             }
         }
@@ -601,11 +600,10 @@ public final class AgramContainerManager {
         record.proxyEnabled = false;
         record.proxyMode = NETWORK_DIRECT;
         record.killSwitch = false;
-        record.pushMode = PUSH_UNIFIED;
-        record.unifiedPushInstance = "agram-" + UUID.randomUUID();
-        record.unifiedPushDistributor = "";
-        record.unifiedPushEndpoint = "";
-        record.unifiedPushStatus = "not_registered";
+        record.pushMode = PUSH_AGRAM;
+        record.agramPushInstance = "agram-" + UUID.randomUUID();
+        record.agramPushEndpoint = "";
+        record.agramPushStatus = "not_registered";
         record.notificationPrivacy = NOTIFICATION_HIDDEN;
         record.ghostModeEnabled = false;
         record.ghostSuppressReadReceipts = true;
@@ -691,10 +689,9 @@ public final class AgramContainerManager {
         json.put("proxy_password", record.proxyPassword);
         json.put("proxy_secret", record.proxySecret);
         json.put("push_mode", record.pushMode);
-        json.put("unified_push_instance", record.unifiedPushInstance);
-        json.put("unified_push_distributor", record.unifiedPushDistributor);
-        json.put("unified_push_endpoint", record.unifiedPushEndpoint);
-        json.put("unified_push_status", record.unifiedPushStatus);
+        json.put("agram_push_instance", record.agramPushInstance);
+        json.put("agram_push_endpoint", record.agramPushEndpoint);
+        json.put("agram_push_status", record.agramPushStatus);
         json.put("notification_privacy", record.notificationPrivacy);
         json.put("pin_salt", record.pinSalt);
         json.put("pin_hash", record.pinHash);
@@ -741,11 +738,18 @@ public final class AgramContainerManager {
         record.proxyUsername = json.optString("proxy_username", "");
         record.proxyPassword = json.optString("proxy_password", "");
         record.proxySecret = json.optString("proxy_secret", "");
-        record.pushMode = json.optString("push_mode", PUSH_UNIFIED);
-        record.unifiedPushInstance = json.optString("unified_push_instance", "agram-" + UUID.randomUUID());
-        record.unifiedPushDistributor = json.optString("unified_push_distributor", "");
-        record.unifiedPushEndpoint = json.optString("unified_push_endpoint", "");
-        record.unifiedPushStatus = json.optString("unified_push_status", "not_registered");
+        String storedPushMode = json.optString("push_mode", PUSH_AGRAM);
+        record.pushMode = PUSH_DIRECT.equals(storedPushMode) ? PUSH_DIRECT : PUSH_AGRAM;
+        record.agramPushInstance = json.optString("agram_push_instance",
+                json.optString("unified_push_instance", "agram-" + UUID.randomUUID()));
+        // The legacy endpoint is read once so the controller can unregister it
+        // from Telegram before replacing it with an embedded Agram endpoint.
+        record.agramPushEndpoint = json.optString("agram_push_endpoint",
+                json.optString("unified_push_endpoint", ""));
+        record.agramPushStatus = LEGACY_PUSH_UNIFIED.equals(storedPushMode)
+                ? "migration_required"
+                : json.optString("agram_push_status",
+                        json.optString("unified_push_status", "not_registered"));
         record.notificationPrivacy = normalizeNotificationPrivacy(json.optInt("notification_privacy", NOTIFICATION_HIDDEN));
         record.pinSalt = nullable(json, "pin_salt");
         record.pinHash = nullable(json, "pin_hash");

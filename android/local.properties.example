@@ -2,3 +2,5 @@
 sdk.dir=C\:\\Android\\Sdk
 TELEGRAM_API_ID=12345678
 TELEGRAM_API_HASH=replace_with_your_api_hash
+# Optional: point the built-in Agram Push transport at a self-hosted ntfy server.
+# AGRAM_PUSH_BASE_URL=https://push.example.org

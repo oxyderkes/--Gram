@@ -22,11 +22,13 @@ main_manifest = read("TMessagesProj/src/main/AndroidManifest.xml")
 standalone_manifest = read("TMessagesProj/config/release/AndroidManifest_standalone.xml")
 message_object = read("TMessagesProj/src/main/java/org/telegram/messenger/MessageObject.java")
 container_manager = read("TMessagesProj/src/main/java/org/telegram/messenger/AgramContainerManager.java")
+push_controller = read("TMessagesProj/src/main/java/org/telegram/messenger/AgramPushController.java")
 container_setup = read("TMessagesProj/src/main/java/org/telegram/ui/AgramContainerSetupActivity.java")
 messages_controller = read("TMessagesProj/src/main/java/org/telegram/messenger/MessagesController.java")
 stories_controller = read("TMessagesProj/src/main/java/org/telegram/ui/Stories/StoriesController.java")
 chat_activity = read("TMessagesProj/src/main/java/org/telegram/ui/ChatActivity.java")
 launch_activity = read("TMessagesProj/src/main/java/org/telegram/ui/LaunchActivity.java")
+standalone_app_manifest = read("TMessagesProj_AppStandalone/src/main/AndroidManifest.xml")
 
 for label, source in (("core", core_gradle), ("standalone", standalone_gradle)):
     if not re.search(r"minSdkVersion\s+26\b", source):
@@ -38,6 +40,22 @@ if 'configuredApiHash ? configuredApiHash : ""' not in core_gradle:
     errors.append("production API hash must not have a public fallback")
 if "checkAgramApiCredentials" not in core_gradle:
     errors.append("mandatory production credential check is missing")
+
+if "org.unifiedpush.android:connector" in core_gradle:
+    errors.append("external UnifiedPush connector dependency returned")
+if "org.unifiedpush.android.distributor" in standalone_app_manifest:
+    errors.append("external UnifiedPush distributor intents returned")
+required_embedded_push_guards = (
+    "PUSH_AGRAM",
+    "byte[] random = new byte[32]",
+    "containerId.equals(current.id)",
+    "endpoint.equals(current.agramPushEndpoint)",
+    "req.token_type = 4",
+)
+embedded_push_sources = container_manager + push_controller + messages_controller
+for guard in required_embedded_push_guards:
+    if guard not in embedded_push_sources:
+        errors.append(f"embedded per-container Agram Push guard is missing: {guard}")
 
 for label, manifest in (("main", main_manifest), ("standalone", standalone_manifest)):
     if 'android:allowBackup="false"' not in manifest or 'android:fullBackupContent="false"' not in manifest:
@@ -72,23 +90,16 @@ required_ghost_hooks = (
     (messages_controller, "shouldMinimizeOnline(currentAccount)"),
     (stories_controller, "shouldSuppressStoryViews(currentAccount)"),
     (chat_activity, "markReadForGhostInteraction()"),
-    (chat_activity, "Ghost Mode · best effort"),
-    (container_setup, "GHOST MODE · BEST EFFORT"),
+    (chat_activity, 'setTitle("Ghost Mode")'),
+    (container_setup, 'sectionLabel(context, "GHOST MODE")'),
 )
 for source, hook in required_ghost_hooks:
     if hook not in source:
         errors.append(f"Ghost Mode hook is missing: {hook}")
 
-required_legend_guards = (
-    "pins.length && i < 3",
-    "Legend target must be another active account",
-    "verifyHash(pin, record.pinSalt, record.pinHash)",
-)
-for guard in required_legend_guards:
-    if guard not in container_manager:
-        errors.append(f"legend-code guard is missing: {guard}")
-if "resolvePinTarget(account" not in launch_activity:
-    errors.append("container unlock does not resolve local legend codes")
+for removed_false_code_hook in ("resolvePinTarget", "Legend target", "ложн"):
+    if removed_false_code_hook in container_manager or removed_false_code_hook in launch_activity:
+        errors.append(f"removed false-code feature returned: {removed_false_code_hook}")
 
 tracked_text = "\n".join(
     path.read_text(encoding="utf-8", errors="ignore")

@@ -1,6 +1,6 @@
 # ά‑Gram source overlay
 
-This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.14` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
+This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.15` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
 
 ## Base source
 
@@ -50,14 +50,15 @@ The resulting APK is under `TMessagesProj_AppStandalone/build/outputs/apk/afat/s
 - Automatic chat viewing and explicit read actions use separate paths. While read suppression is active, opening or scrolling through a regular chat does not mutate its local unread state, remove its notification, or send a receipt. The chat-list action and notification action “Mark as read” explicitly clear both local state and the server receipt; optional read-on-interaction does the same after a reply or reaction.
 - Story viewing follows the same local-preservation rule: in Ghost Mode an opened story keeps its unread ring and notification. Opening a story and sending any story reaction use explicit confirmation dialogs.
 - Per-container network source of truth and native proxy application: direct, custom SOCKS5/MTProto proxy, or Tor through Orbot. With kill switch enabled, a proxy error or unavailable Tor pauses only that account's native MTProto engine while its local database remains readable.
-- UnifiedPush connector 3.0.10 integration. Each container owns a random registration instance and a distinct endpoint registered with Telegram as Simple Push type 4; `other_uids` remains empty so accounts are not merged into one token. Direct MTProto push remains available as an explicit fallback.
+- Built-in Agram Push transport with no distributor application. Each container owns a random 256-bit endpoint registered with Telegram as Simple Push type 4; `other_uids` remains empty so accounts are not merged into one token. The foreground service shares only Android lifecycle management while every subscription is bound to an immutable container id, account slot and route. Direct MTProto push remains available as an explicit fallback.
+- The default `ntfy.sh` relay sees connection metadata and an opaque Telegram wake value, but never message text, media, auth keys or the account identity stored by Agram. Endpoint URLs are capability secrets, remain encrypted locally and are not printed in the settings preview. Set `AGRAM_PUSH_BASE_URL` to a compatible self-hosted ntfy server when relay ownership or metadata separation is required.
 - Per-container notification privacy: hide identity, show author only, or use full Telegram previews. The secure default is hidden.
 - 32 stable Java/native engine slots and removal of the Premium account-count gate. Containers provide isolation and lifecycle management over those bounded engine instances; they do not turn the native engine into an unbounded process pool.
 - Staggered lightweight connections for background accounts and lazy initialization of heavy Java controllers on selection.
 - Re-entrancy protection during account switching and sparse-slot-safe notification media handling.
 - Account selectors contain active sessions only. Ended, blocked and revoked sessions are removed during logout or migration, and their account slot becomes immediately reusable instead of leaving a non-actionable local card.
 - Separate package, account types, MIME types, shortcuts, broadcast actions, app name and launcher icon.
-- Standalone direct-push foreground service for use without Google Play Services, plus optional UnifiedPush distributor support.
+- Standalone foreground push service for use without Google Play Services. The default relay is configurable with `AGRAM_PUSH_BASE_URL` for reproducible self-hosting; only opaque wake signals pass through it, never Telegram message contents.
 - Android direct-share conversation shortcuts are disabled to avoid exposing a dialog from another container. On Android 13+ Recent Apps screenshots are disabled without blocking ordinary in-app screenshots.
 - arm64-only Pixel/GrapheneOS flavor and project-specific signing configuration.
 - Telegram API credentials are read from private build settings. Public/test fallback credentials are rejected by the build.

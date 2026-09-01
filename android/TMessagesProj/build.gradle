@@ -28,15 +28,9 @@ configurations {
 configurations.all {
     exclude group: 'com.google.firebase', module: 'firebase-core'
     exclude group: 'androidx.recyclerview', module: 'recyclerview'
-    // UnifiedPush 3 uses current Tink. The legacy tink-android 1.5 pulled by
-    // security-crypto contains the same classes; Tink 1.17 also ships the
-    // Android integration APIs, so keeping both is invalid and unnecessary.
-    exclude group: 'com.google.crypto.tink', module: 'tink-android'
 }
 
 dependencies {
-    // One UnifiedPush registration instance is created per Agram container.
-    implementation 'org.unifiedpush.android:connector:3.0.10'
     implementation 'androidx.core:core:1.16.0'
     implementation 'androidx.palette:palette:1.0.0'
     implementation 'androidx.exifinterface:exifinterface:1.3.6'
@@ -141,11 +135,15 @@ android {
 
         def configuredApiId = getProps("TELEGRAM_API_ID")
         def configuredApiHash = getProps("TELEGRAM_API_HASH")
+        def configuredAgramPushUrl = getProps("AGRAM_PUSH_BASE_URL")
         // Production builds must never silently fall back to Telegram's public
         // sample credentials. A zero/empty pair keeps IDE sync working; the
         // release task guard below rejects such a build before compilation.
         buildConfigField "int", "TELEGRAM_APP_ID", configuredApiId ? configuredApiId : "0"
         buildConfigField "String", "TELEGRAM_API_HASH", "\"" + (configuredApiHash ? configuredApiHash : "") + "\""
+        // Agram owns the Android transport. The HTTPS relay only carries an
+        // opaque wake signal and can be replaced with a self-hosted ntfy URL.
+        buildConfigField "String", "AGRAM_PUSH_BASE_URL", "\"" + (configuredAgramPushUrl ? configuredAgramPushUrl : "https://ntfy.sh") + "\""
 
         vectorDrawables.generatedDensities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi']
 

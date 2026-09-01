@@ -16254,7 +16254,7 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void performLogout(int type, boolean preserveBlockedAccount) {
-        AgramUnifiedPushController.getInstance().unregisterAccount(currentAccount, true);
+        AgramPushController.getInstance().unregisterAccount(currentAccount, true);
         if (type == 1) {
             unregistedPush();
             TLRPC.TL_auth_logOut req = new TLRPC.TL_auth_logOut();
@@ -16356,7 +16356,7 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     /** Registers the per-container Simple Push endpoint documented by Telegram. */
-    public void registerAgramUnifiedPush(String endpoint) {
+    public void registerAgramPush(String endpoint) {
         if (TextUtils.isEmpty(endpoint) || getUserConfig().getClientUserId() == 0) {
             return;
         }
@@ -16370,16 +16370,16 @@ public class MessagesController extends BaseController implements NotificationCe
         // through other_uids, which would defeat container isolation.
         getConnectionsManager().sendRequest(req, (response, error) -> {
             if (response instanceof TLRPC.TL_boolTrue) {
-                AgramContainerManager.getInstance().saveUnifiedPushEndpoint(
+                AgramContainerManager.getInstance().saveAgramPushEndpoint(
                         currentAccount, endpoint, "registered");
             } else {
-                AgramContainerManager.getInstance().saveUnifiedPushEndpoint(
+                AgramContainerManager.getInstance().saveAgramPushEndpoint(
                         currentAccount, endpoint, "telegram_error");
             }
         });
     }
 
-    public void unregisterAgramUnifiedPush(String endpoint) {
+    public void unregisterAgramPush(String endpoint) {
         if (TextUtils.isEmpty(endpoint) || getUserConfig().getClientUserId() == 0) {
             return;
         }
