@@ -136,17 +136,14 @@ public final class AgramContainerManager {
     }
 
     /**
-     * Repairs a stale locked card left by an interrupted or server-side
-     * logout. It is called only after UserConfig has been loaded.
+     * Reconciles the profile lock without inferring logout from a transient
+     * inactive UserConfig. Confirmed manual/server logout paths delete the
+     * container explicitly; cold-start restoration must never do so.
      */
     public ContainerRecord ensureFreshContainerForSessionState(int account) {
         synchronized (sync) {
             ContainerRecord record = getContainer(account);
             boolean active = UserConfig.getInstance(account).isClientActivated();
-            if (!active && record != null && record.profileLocked) {
-                deleteContainer(account);
-                record = null;
-            }
             if (record == null) {
                 record = ensureContainer(account);
             } else if (active && !record.profileLocked) {

@@ -543,7 +543,8 @@ public class AgramContainerSetupActivity extends BaseFragment {
         if (AgramTorManager.STATE_READY.equals(torState)) {
             torStatusAction.setText("TOR ПОДКЛЮЧЁН · ОТКРЫТЬ УПРАВЛЕНИЕ");
         } else if (AgramTorManager.STATE_STARTING.equals(torState)) {
-            torStatusAction.setText("TOR ЗАПУСКАЕТСЯ · СЕТЬ ЗАБЛОКИРОВАНА");
+            torStatusAction.setText("TOR " + AgramTorManager.getInstance().getBootstrapProgress()
+                    + "% · СЕТЬ ЗАБЛОКИРОВАНА");
         } else if (AgramTorManager.STATE_ERROR.equals(torState)) {
             torStatusAction.setText("ОШИБКА TOR · ОТКРЫТЬ УПРАВЛЕНИЕ");
         } else {

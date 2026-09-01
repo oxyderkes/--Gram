@@ -102,7 +102,6 @@ import androidx.viewpager.widget.ViewPager;
 import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AgramContainerManager;
 import org.telegram.messenger.AgramNetworkController;
-import org.telegram.messenger.AgramSessionRouteController;
 import org.telegram.messenger.AgramTorManager;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.AnimationNotificationsLocker;
@@ -2843,18 +2842,12 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     private NotificationCenter.ObserversGroup observersGroup;
     private NotificationCenter.ObserversGroup globalObserversGroup;
     private final AgramTorManager.Listener agramTorListener = state -> updateAgramRouteHeader();
-    private final AgramSessionRouteController.Listener agramRouteListener = (account, info) -> {
-        if (account == currentAccount) {
-            updateAgramRouteHeader();
-        }
-    };
 
     @Override
     public boolean onFragmentCreate() {
         super.onFragmentCreate();
 
         AgramTorManager.getInstance().addListener(agramTorListener);
-        AgramSessionRouteController.getInstance().addListener(agramRouteListener);
 
         if (arguments != null) {
             onlySelect = arguments.getBoolean("onlySelect", false);
@@ -3094,7 +3087,6 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     @Override
     public void onFragmentDestroy() {
         AgramTorManager.getInstance().removeListener(agramTorListener);
-        AgramSessionRouteController.getInstance().removeListener(agramRouteListener);
         super.onFragmentDestroy();
         if (observersGroup != null) {
             observersGroup.removeAllObservers();
@@ -3468,7 +3460,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         fragmentSearchFieldWatcher.setDoNotCloseAfterFieldEmpty();
 
         if (initialDialogsType == DIALOGS_TYPE_DEFAULT && !onlySelect && searchString == null && folderId == 0 && communityId == 0) {
-            agramRouteItem = menu.addItem(AGRAM_ROUTE_ITEM_ID, "МАРШРУТ\nпроверяем…");
+            agramRouteItem = menu.addItem(AGRAM_ROUTE_ITEM_ID, "МАРШРУТ\nне настроен");
             TextView routeText = agramRouteItem.getTextView();
             routeText.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 9.5f);
             routeText.setGravity(Gravity.CENTER);
@@ -3492,10 +3484,6 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 agramRouteItem.setLayoutParams(params);
             }
             agramRouteItem.setOnClickListener(v -> presentFragment(new AgramTorSettingsActivity(currentAccount)));
-            agramRouteItem.setOnLongClickListener(v -> {
-                AgramSessionRouteController.getInstance().refresh(currentAccount, true);
-                return true;
-            });
             agramNetworkDrawable = new ProxyDrawable(context);
             agramNetworkDrawable.setColorFilter(new PorterDuffColorFilter(
                     getThemedColor(Theme.key_actionBarDefaultIcon), PorterDuff.Mode.MULTIPLY));
@@ -7126,25 +7114,27 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         AgramContainerManager.ContainerRecord record = AgramContainerManager.getInstance().getContainer(currentAccount);
         String mode = record == null ? AgramContainerManager.NETWORK_DIRECT : record.proxyMode;
         String modeLabel;
+        String secondLine;
         if (AgramContainerManager.NETWORK_TOR.equals(mode)) {
-            String torState = AgramTorManager.getInstance().getState();
+            AgramTorManager tor = AgramTorManager.getInstance();
+            String torState = tor.getState();
             modeLabel = AgramTorManager.STATE_READY.equals(torState) ? "◉ TOR" :
                     (AgramTorManager.STATE_ERROR.equals(torState) ? "! TOR" : "… TOR");
+            if (AgramTorManager.STATE_READY.equals(torState)) {
+                secondLine = "100% · подключено";
+            } else if (AgramTorManager.STATE_STARTING.equals(torState)) {
+                secondLine = tor.getBootstrapProgress() + "% · подключение";
+            } else if (AgramTorManager.STATE_ERROR.equals(torState)) {
+                secondLine = "ошибка запуска";
+            } else {
+                secondLine = "не запущен";
+            }
         } else if (AgramContainerManager.NETWORK_PROXY.equals(mode)) {
             modeLabel = "◆ PROXY";
+            secondLine = "маршрут аккаунта";
         } else {
             modeLabel = "● DIRECT";
-        }
-        AgramSessionRouteController.RouteInfo route = AgramSessionRouteController.getInstance().get(currentAccount);
-        String secondLine;
-        if (!TextUtils.isEmpty(route.ip)) {
-            String location = route.approximateLocation();
-            secondLine = route.ip + (TextUtils.isEmpty(location) ? "" : " · " + location);
-        } else if (route.loading) {
-            secondLine = "проверяем IP…";
-        } else {
-            String networkState = AgramNetworkController.getInstance().getState(currentAccount);
-            secondLine = networkState.startsWith("tor_") ? "сеть закрыта" : "IP не получен";
+            secondLine = "прямое соединение";
         }
         agramRouteItem.getTextView().setText(modeLabel + "\n" + secondLine);
         agramRouteItem.setContentDescription(modeLabel + ". " + secondLine + ". Открыть настройки маршрута");
@@ -7164,7 +7154,6 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         super.onResume();
         updateGhostModeHeader();
         updateAgramRouteHeader();
-        AgramSessionRouteController.getInstance().refresh(currentAccount, false);
         if (dialogStoriesCell != null) {
             dialogStoriesCell.onResume();
         }

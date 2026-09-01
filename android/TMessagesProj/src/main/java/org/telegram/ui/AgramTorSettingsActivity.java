@@ -13,6 +13,7 @@ import android.view.View;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -40,6 +41,7 @@ public class AgramTorSettingsActivity extends BaseFragment
     private TextView routeView;
     private TextView primaryAction;
     private TextView circuitAction;
+    private ProgressBar bootstrapProgress;
     private Switch bridgesEnabled;
     private EditText bridgeLines;
 
@@ -115,6 +117,10 @@ public class AgramTorSettingsActivity extends BaseFragment
         statusCard.addView(label(context, "СОСТОЯНИЕ"));
         stateView = mono(context);
         statusCard.addView(stateView, LayoutHelper.createLinear(-1, -2, 0, 6, 0, 8));
+        bootstrapProgress = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal);
+        bootstrapProgress.setMax(100);
+        bootstrapProgress.setIndeterminate(false);
+        statusCard.addView(bootstrapProgress, LayoutHelper.createLinear(-1, 6, 0, 0, 0, 8));
         routeView = mono(context);
         statusCard.addView(routeView, LayoutHelper.createLinear(-1, -2, 0, 0, 0, 8));
 
@@ -124,6 +130,12 @@ public class AgramTorSettingsActivity extends BaseFragment
         TextView refreshIp = action(context, "ОБНОВИТЬ IP И ГЕО TELEGRAM");
         refreshIp.setOnClickListener(v -> AgramSessionRouteController.getInstance().refresh(account, true));
         statusCard.addView(refreshIp, LayoutHelper.createLinear(-1, 44, 0, 8, 0, 0));
+        TextView copyDiagnostics = action(context, "КОПИРОВАТЬ ДИАГНОСТИКУ TOR");
+        copyDiagnostics.setOnClickListener(v -> {
+            AndroidUtilities.addToClipboard(AgramTorManager.getInstance().getDiagnosticSummary());
+            Toast.makeText(getParentActivity(), "Диагностика Tor скопирована", Toast.LENGTH_SHORT).show();
+        });
+        statusCard.addView(copyDiagnostics, LayoutHelper.createLinear(-1, 44, 0, 8, 0, 0));
 
         LinearLayout identityCard = card(context);
         content.addView(identityCard, LayoutHelper.createLinear(-1, -2, 0, 0, 0, 12));
@@ -184,12 +196,8 @@ public class AgramTorSettingsActivity extends BaseFragment
             AgramContainerManager.getInstance().saveNetworkSettings(account,
                     AgramContainerManager.NETWORK_TOR, true, "", 0, "", "", "");
         }
-        if (AgramTorManager.STATE_ERROR.equals(AgramTorManager.getInstance().getState())) {
-            AgramTorManager.getInstance().restart();
-        } else {
-            AgramNetworkController.getInstance().apply(account);
-            AgramTorManager.getInstance().ensureStarted();
-        }
+        AgramNetworkController.getInstance().apply(account);
+        AgramTorManager.getInstance().ensureStarted();
         updateState();
     }
 
@@ -220,15 +228,22 @@ public class AgramTorSettingsActivity extends BaseFragment
         record = AgramContainerManager.getInstance().ensureContainer(account);
         AgramTorManager tor = AgramTorManager.getInstance();
         String torState = tor.getState();
-        String bootstrap = tor.getBootstrapStatus();
+        String bootstrap = tor.getBootstrapSummary();
+        int progress = tor.getBootstrapProgress();
         String network = AgramNetworkController.getInstance().getState(account);
         stateView.setText("режим: " + record.proxyMode
                 + "\nTor: " + torState
                 + (tor.getSocksPort() > 0 ? " · SOCKS 127.0.0.1:" + tor.getSocksPort() : "")
-                + (!TextUtils.isEmpty(bootstrap) ? "\nbootstrap: " + bootstrap : "")
+                + ((AgramTorManager.STATE_STARTING.equals(torState)
+                || AgramTorManager.STATE_READY.equals(torState))
+                ? "\nbootstrap: " + progress + "%" : "")
+                + (!TextUtils.isEmpty(bootstrap) ? " · " + bootstrap : "")
                 + "\nконтейнер: " + network + " · fail-closed"
-                + (AgramTorManager.STATE_ERROR.equals(torState) && !TextUtils.isEmpty(tor.getLastError())
+                + (!TextUtils.isEmpty(tor.getLastError())
                 ? "\nошибка: " + tor.getLastError() : ""));
+        bootstrapProgress.setProgress(progress, true);
+        bootstrapProgress.setVisibility(AgramTorManager.STATE_STARTING.equals(torState)
+                || AgramTorManager.STATE_READY.equals(torState) ? View.VISIBLE : View.GONE);
 
         AgramSessionRouteController.RouteInfo route = AgramSessionRouteController.getInstance().get(account);
         String location = route.approximateLocation();
@@ -238,10 +253,13 @@ public class AgramTorSettingsActivity extends BaseFragment
 
         boolean usesTor = AgramContainerManager.NETWORK_TOR.equals(record.proxyMode);
         primaryAction.setText(usesTor
-                ? (AgramTorManager.STATE_ERROR.equals(torState) ? "ПОВТОРИТЬ ЗАПУСК TOR" : "ЗАПУСТИТЬ / ПРОВЕРИТЬ TOR")
+                ? (AgramTorManager.STATE_READY.equals(torState) ? "TOR ПОДКЛЮЧЁН"
+                : (AgramTorManager.STATE_STARTING.equals(torState)
+                ? "TOR ЗАПУСКАЕТСЯ · " + progress + "%" : "ПОВТОРИТЬ ЗАПУСК TOR"))
                 : "ИСПОЛЬЗОВАТЬ TOR ДЛЯ ЭТОГО АККАУНТА");
-        circuitAction.setEnabled(usesTor);
-        circuitAction.setAlpha(usesTor ? 1f : .45f);
+        boolean circuitReady = usesTor && AgramTorManager.STATE_READY.equals(torState);
+        circuitAction.setEnabled(circuitReady);
+        circuitAction.setAlpha(circuitReady ? 1f : .45f);
     }
 
     @Override
