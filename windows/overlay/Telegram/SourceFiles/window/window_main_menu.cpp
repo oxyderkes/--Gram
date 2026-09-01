@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_main_menu.h"
 
 #include "apiwrap.h"
+#include "api/api_updates.h"
 #include "base/event_filter.h"
 #include "base/qt_signal_producer.h"
 #include "boxes/about_box.h"
@@ -743,6 +744,24 @@ void MainMenu::setupMenu() {
 			_controller->session().supportTemplates().reload();
 		});
 	}
+	const auto ghostModeToggle = addAction(
+		rpl::single(u"Ghost Mode"_q),
+		{ &st::menuIconStealth }
+	)->toggleOn(
+		_controller->session().settings().ghostModeEnabledValue());
+	ghostModeToggle->toggledChanges(
+	) | rpl::filter([=](bool enabled) {
+		return enabled
+			!= _controller->session().settings().ghostModeEnabled();
+	}) | rpl::on_next([=](bool enabled) {
+		auto &settings = _controller->session().settings();
+		settings.setGhostModeEnabled(enabled);
+		_controller->session().saveSettings();
+		_controller->session().updates().updateOnline();
+		controller->showToast(enabled
+			? u"Ghost Mode включён"_q
+			: u"Ghost Mode выключен"_q);
+	}, ghostModeToggle->lifetime());
 	addAction(
 		tr::lng_menu_settings(),
 		{ &st::menuIconSettings }
