@@ -17,7 +17,9 @@ import org.telegram.tgnet.ConnectionsManager;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.Authenticator;
 import java.net.InetSocketAddress;
+import java.net.PasswordAuthentication;
 import java.net.Proxy;
 import java.net.URL;
 import java.net.URLConnection;
@@ -39,6 +41,7 @@ public final class AgramPushController {
     private static final String TOPIC_PREFIX = "agram_";
     private static final long INITIAL_RECONNECT_DELAY_MS = 2_000L;
     private static final long MAX_RECONNECT_DELAY_MS = 60_000L;
+    private static final Object PROXY_AUTH_LOCK = new Object();
 
     private final Object sync = new Object();
     private final SparseArray<Subscription> subscriptions = new SparseArray<>();
@@ -73,6 +76,14 @@ public final class AgramPushController {
         if (AgramContainerManager.PUSH_AGRAM.equals(record.pushMode)
                 && UserConfig.getInstance(account).isClientActivated()) {
             requestServiceStart();
+        }
+        refreshSubscriptions();
+    }
+
+    /** Reconnects the selected subscription after its proxy/Tor route changes. */
+    public void onNetworkRouteChanged(int account) {
+        synchronized (sync) {
+            stopSubscriptionLocked(account);
         }
         refreshSubscriptions();
     }
@@ -326,7 +337,8 @@ public final class AgramPushController {
             }
             String cursor = TextUtils.isEmpty(lastMessageId) ? "10m" : lastMessageId;
             URL streamUrl = new URL(endpoint + "/json?since=" + cursor);
-            URLConnection raw = openConnection(streamUrl, record);
+            RoutedConnection routed = openConnection(streamUrl, record);
+            URLConnection raw = routed.connection;
             if (!(raw instanceof HttpsURLConnection)) {
                 throw new IOException("Agram Push requires HTTPS");
             }
@@ -337,7 +349,23 @@ public final class AgramPushController {
             https.setUseCaches(false);
             https.setRequestProperty("Accept", "application/x-ndjson");
             https.setRequestProperty("User-Agent", "AgramPush/" + BuildVars.BUILD_VERSION_STRING);
-            int status = https.getResponseCode();
+            int status;
+            if (routed.credentials == null) {
+                status = https.getResponseCode();
+            } else {
+                // SOCKS authentication is exposed through a process-wide API.
+                // Serialize only the handshake, bind credentials to this exact
+                // thread/proxy, and clear the thread-local scope immediately.
+                synchronized (PROXY_AUTH_LOCK) {
+                    ScopedProxyAuthenticator.begin(
+                            routed.proxyHost, routed.proxyPort, routed.credentials);
+                    try {
+                        status = https.getResponseCode();
+                    } finally {
+                        ScopedProxyAuthenticator.end();
+                    }
+                }
+            }
             if (status < 200 || status >= 300) {
                 throw new IOException("Push server returned HTTP " + status);
             }
@@ -351,24 +379,33 @@ public final class AgramPushController {
             }
         }
 
-        private URLConnection openConnection(URL url, AgramContainerManager.ContainerRecord record) throws IOException {
+        private RoutedConnection openConnection(URL url, AgramContainerManager.ContainerRecord record) throws IOException {
             if (AgramContainerManager.NETWORK_DIRECT.equals(record.proxyMode)) {
-                return url.openConnection();
+                return new RoutedConnection(url.openConnection(), null, 0, null);
             }
             if (AgramContainerManager.NETWORK_TOR.equals(record.proxyMode)) {
+                int port = AgramTorManager.getInstance().getSocksPort();
+                if (port <= 0) {
+                    throw new IOException("Embedded Tor is not ready; push route stays fail-closed");
+                }
+                String isolationId = TextUtils.isEmpty(record.torIsolationId)
+                        ? "agram-account-" + account : record.torIsolationId;
                 Proxy proxy = new Proxy(Proxy.Type.SOCKS,
-                        InetSocketAddress.createUnresolved("127.0.0.1", 9050));
-                return url.openConnection(proxy);
+                        InetSocketAddress.createUnresolved("127.0.0.1", port));
+                return new RoutedConnection(url.openConnection(proxy), "127.0.0.1", port,
+                        new PasswordAuthentication("<torS0X>0", isolationId.toCharArray()));
             }
             if (AgramContainerManager.NETWORK_PROXY.equals(record.proxyMode)
                     && TextUtils.isEmpty(record.proxySecret)
-                    && TextUtils.isEmpty(record.proxyUsername)
-                    && TextUtils.isEmpty(record.proxyPassword)
                     && !TextUtils.isEmpty(record.proxyAddress)
                     && record.proxyPort > 0) {
                 Proxy proxy = new Proxy(Proxy.Type.SOCKS,
                         InetSocketAddress.createUnresolved(record.proxyAddress, record.proxyPort));
-                return url.openConnection(proxy);
+                PasswordAuthentication credentials = TextUtils.isEmpty(record.proxyUsername)
+                        && TextUtils.isEmpty(record.proxyPassword) ? null
+                        : new PasswordAuthentication(record.proxyUsername, record.proxyPassword.toCharArray());
+                return new RoutedConnection(url.openConnection(proxy), record.proxyAddress,
+                        record.proxyPort, credentials);
             }
             throw new IOException("Selected proxy cannot carry the HTTPS push stream without bypassing container routing");
         }
@@ -401,6 +438,62 @@ public final class AgramPushController {
                     && endpoint.equals(current.agramPushEndpoint)
                     && AgramContainerManager.PUSH_AGRAM.equals(current.pushMode)
                     && UserConfig.getInstance(account).isClientActivated();
+        }
+    }
+
+    private static final class RoutedConnection {
+        final URLConnection connection;
+        final String proxyHost;
+        final int proxyPort;
+        final PasswordAuthentication credentials;
+
+        RoutedConnection(URLConnection connection, String proxyHost, int proxyPort,
+                         PasswordAuthentication credentials) {
+            this.connection = connection;
+            this.proxyHost = proxyHost;
+            this.proxyPort = proxyPort;
+            this.credentials = credentials;
+        }
+    }
+
+    private static final class ScopedProxyAuthenticator extends Authenticator {
+        private static final ScopedProxyAuthenticator INSTANCE = new ScopedProxyAuthenticator();
+        private static final ThreadLocal<ScopedCredentials> ACTIVE = new ThreadLocal<>();
+
+        static void begin(String proxyHost, int proxyPort, PasswordAuthentication credentials) {
+            ACTIVE.set(new ScopedCredentials(proxyHost, proxyPort, credentials));
+            Authenticator.setDefault(INSTANCE);
+        }
+
+        static void end() {
+            ACTIVE.remove();
+        }
+
+        @Override
+        protected PasswordAuthentication getPasswordAuthentication() {
+            ScopedCredentials active = ACTIVE.get();
+            if (active == null) {
+                return null;
+            }
+            boolean socksRequest = "SOCKS5".equalsIgnoreCase(getRequestingProtocol());
+            if ((getRequestorType() != RequestorType.PROXY && !socksRequest)
+                    || getRequestingPort() != active.proxyPort
+                    || !active.proxyHost.equalsIgnoreCase(getRequestingHost())) {
+                return null;
+            }
+            return active.credentials;
+        }
+    }
+
+    private static final class ScopedCredentials {
+        private final String proxyHost;
+        private final int proxyPort;
+        private final PasswordAuthentication credentials;
+
+        ScopedCredentials(String proxyHost, int proxyPort, PasswordAuthentication credentials) {
+            this.proxyHost = proxyHost;
+            this.proxyPort = proxyPort;
+            this.credentials = credentials;
         }
     }
 }

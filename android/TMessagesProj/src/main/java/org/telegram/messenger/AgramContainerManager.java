@@ -51,7 +51,7 @@ public final class AgramContainerManager {
     private static final String REGISTRY = "agram_container_registry";
     private static final String SLOT_PREFIX = "slot_";
     private static final String METADATA_PREFIX = "metadata_";
-    private static final int SCHEMA_VERSION = 4;
+    private static final int SCHEMA_VERSION = 5;
     private static final String LEGACY_DURESS_PREFS = "agram_duress_registry";
     private static final String LEGACY_DURESS_SCOPE = "agram_global_duress_v1";
     private static final String LEGACY_CODES_PURGED = "legacy_false_codes_purged_v2";
@@ -411,6 +411,7 @@ public final class AgramContainerManager {
         public String proxyUsername;
         public String proxyPassword;
         public String proxySecret;
+        public String torIsolationId;
         public String pushMode;
         public String agramPushInstance;
         public String agramPushEndpoint;
@@ -466,14 +467,18 @@ public final class AgramContainerManager {
      */
     public void publishProxyForSelectedContainer(int account) {
         ProxyProfile proxy = getProxyProfile(account);
+        boolean tor = NETWORK_TOR.equals(proxy.mode);
+        int torPort = tor ? AgramTorManager.getInstance().getSocksPort() : 0;
+        boolean enabled = proxy.enabled && (!tor || torPort > 0);
         ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Context.MODE_PRIVATE)
                 .edit()
-                .putBoolean("proxy_enabled", proxy.enabled)
-                .putString("proxy_ip", proxy.address)
-                .putInt("proxy_port", proxy.port)
-                .putString("proxy_user", proxy.username)
-                .putString("proxy_pass", proxy.password)
-                .putString("proxy_secret", proxy.secret)
+                .putBoolean("proxy_enabled", enabled)
+                .putString("proxy_ip", enabled ? proxy.address : "")
+                .putInt("proxy_port", tor && torPort > 0 ? torPort : proxy.port)
+                .putString("proxy_user", tor && enabled ? "<torS0X>0" : proxy.username)
+                .putString("proxy_pass", tor && enabled
+                        ? ensureContainer(account).torIsolationId : proxy.password)
+                .putString("proxy_secret", tor ? "" : proxy.secret)
                 .commit();
     }
 
@@ -506,10 +511,15 @@ public final class AgramContainerManager {
             ContainerRecord record = ensureContainer(account);
             String normalizedMode = normalizeNetworkMode(mode);
             record.proxyMode = normalizedMode;
-            record.killSwitch = killSwitch && !NETWORK_DIRECT.equals(normalizedMode);
+            // Embedded Tor is always fail-closed. It must never silently fall
+            // back to a direct MTProto connection while Tor is bootstrapping.
+            record.killSwitch = NETWORK_TOR.equals(normalizedMode)
+                    || (killSwitch && !NETWORK_DIRECT.equals(normalizedMode));
             record.proxyEnabled = !NETWORK_DIRECT.equals(normalizedMode);
             record.proxyAddress = NETWORK_TOR.equals(normalizedMode) ? "127.0.0.1" : safe(address).trim();
-            record.proxyPort = NETWORK_TOR.equals(normalizedMode) ? 9050 : normalizePort(port);
+            // The embedded daemon allocates its listener dynamically. Zero is
+            // a persisted marker, never a network fallback port.
+            record.proxyPort = NETWORK_TOR.equals(normalizedMode) ? 0 : normalizePort(port);
             record.proxyUsername = NETWORK_TOR.equals(normalizedMode) ? "" : safe(username);
             record.proxyPassword = NETWORK_TOR.equals(normalizedMode) ? "" : safe(password);
             record.proxySecret = NETWORK_TOR.equals(normalizedMode) ? "" : safe(secret);
@@ -597,6 +607,7 @@ public final class AgramContainerManager {
         record.proxyUsername = "";
         record.proxyPassword = "";
         record.proxySecret = "";
+        record.torIsolationId = newTorIsolationId();
         record.proxyEnabled = false;
         record.proxyMode = NETWORK_DIRECT;
         record.killSwitch = false;
@@ -688,6 +699,7 @@ public final class AgramContainerManager {
         json.put("proxy_username", record.proxyUsername);
         json.put("proxy_password", record.proxyPassword);
         json.put("proxy_secret", record.proxySecret);
+        json.put("tor_isolation_id", record.torIsolationId);
         json.put("push_mode", record.pushMode);
         json.put("agram_push_instance", record.agramPushInstance);
         json.put("agram_push_endpoint", record.agramPushEndpoint);
@@ -738,6 +750,10 @@ public final class AgramContainerManager {
         record.proxyUsername = json.optString("proxy_username", "");
         record.proxyPassword = json.optString("proxy_password", "");
         record.proxySecret = json.optString("proxy_secret", "");
+        record.torIsolationId = json.optString("tor_isolation_id", "");
+        if (TextUtils.isEmpty(record.torIsolationId)) {
+            record.torIsolationId = newTorIsolationId();
+        }
         String storedPushMode = json.optString("push_mode", PUSH_AGRAM);
         record.pushMode = PUSH_DIRECT.equals(storedPushMode) ? PUSH_DIRECT : PUSH_AGRAM;
         record.agramPushInstance = json.optString("agram_push_instance",
@@ -907,6 +923,12 @@ public final class AgramContainerManager {
 
     private static String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private static String newTorIsolationId() {
+        // Tor's IsolateSOCKSAuth groups streams by SOCKS username/password.
+        // This opaque value is stored only inside the encrypted container record.
+        return "agram-" + UUID.randomUUID().toString().replace("-", "");
     }
 
     private static String androidMajorVersion() {

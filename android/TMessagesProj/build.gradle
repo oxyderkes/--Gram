@@ -19,6 +19,7 @@ idea {
 repositories {
     mavenCentral()
     google()
+    maven { url 'https://raw.githubusercontent.com/guardianproject/gpmaven/master' }
 }
 
 configurations {
@@ -38,6 +39,10 @@ dependencies {
     implementation "androidx.sharetarget:sharetarget:1.2.0"
     implementation 'androidx.interpolator:interpolator:1.0.0'
     implementation 'androidx.biometric:biometric:1.1.0'
+    // 0.4.8.17.2 is the current Tor 0.4.8 LTS artifact compatible with this
+    // project's Android 36 / Java 17 toolchain. 0.4.9.11 requires API 37.
+    implementation 'info.guardianproject:tor-android:0.4.8.17.2'
+    implementation 'info.guardianproject:jtorctl:0.4.5.7'
 
     implementation 'com.google.android.gms:play-services-cast-framework:21.4.0'
     implementation "androidx.mediarouter:mediarouter:1.7.0"
@@ -310,3 +315,17 @@ task checkAgramApiCredentials {
 }
 
 preBuild.dependsOn checkVisibility, checkAgramApiCredentials
+
+// Gradle's incremental classpath snapshotter intermittently fails on large
+// transformed Android dependency jars on Windows (AccessDeniedException after
+// javac has already finished). Full javac compilation is slower but reliable.
+tasks.withType(JavaCompile).configureEach {
+    if (System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')) {
+        options.incremental = false
+        // Fork javac so Gradle's in-process JavacFileManager does not trip the
+        // Windows zipfs/antivirus lock bug while closing transformed AAR jars.
+        options.fork = true
+        options.forkOptions.memoryMaximumSize = '6g'
+        options.forkOptions.executable = new File(System.getProperty('java.home'), 'bin/javac.exe').absolutePath
+    }
+}

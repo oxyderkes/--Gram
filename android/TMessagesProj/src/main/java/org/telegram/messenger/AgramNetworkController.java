@@ -3,49 +3,23 @@
  */
 package org.telegram.messenger;
 
-import android.content.BroadcastReceiver;
-import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
-import android.content.pm.PackageManager;
-import android.os.Build;
 import android.text.TextUtils;
 import android.util.SparseArray;
+import android.util.SparseBooleanArray;
 
 import org.telegram.tgnet.ConnectionsManager;
 
-/** Applies per-container proxy policy and keeps Tor profiles fail-closed. */
+/** Applies per-container proxy policy and keeps routed profiles fail-closed. */
 public final class AgramNetworkController {
-    private static final String ORBOT_PACKAGE = "org.torproject.android";
-    private static final String ACTION_START = "org.torproject.android.intent.action.START";
-    private static final String ACTION_STATUS = "org.torproject.android.intent.action.STATUS";
-    private static final String EXTRA_PACKAGE_NAME = "org.torproject.android.intent.extra.PACKAGE_NAME";
-    private static final String EXTRA_STATUS = "org.torproject.android.intent.extra.STATUS";
-    private static final String EXTRA_SOCKS_PORT = "org.torproject.android.intent.extra.SOCKS_PROXY_PORT";
-    private static final String STATUS_ON = "ON";
-
     private static final AgramNetworkController INSTANCE = new AgramNetworkController();
     private final SparseArray<String> state = new SparseArray<>();
-    private boolean receiverRegistered;
+    private final SparseBooleanArray managedAccounts = new SparseBooleanArray();
 
     public static AgramNetworkController getInstance() {
         return INSTANCE;
     }
 
     private AgramNetworkController() {
-    }
-
-    public synchronized void initialize(Context context) {
-        if (receiverRegistered) {
-            return;
-        }
-        IntentFilter filter = new IntentFilter(ACTION_STATUS);
-        if (Build.VERSION.SDK_INT >= 33) {
-            context.registerReceiver(orbotStatusReceiver, filter, Context.RECEIVER_EXPORTED);
-        } else {
-            context.registerReceiver(orbotStatusReceiver, filter);
-        }
-        receiverRegistered = true;
     }
 
     public void apply(int account) {
@@ -57,11 +31,20 @@ public final class AgramNetworkController {
     }
 
     private void apply(int account, boolean resume) {
-        initialize(ApplicationLoader.applicationContext);
+        managedAccounts.put(account, true);
+        AgramContainerManager.ContainerRecord record = AgramContainerManager.getInstance().ensureContainer(account);
         AgramContainerManager.ProxyProfile proxy = AgramContainerManager.getInstance().getProxyProfile(account);
         if (AgramContainerManager.NETWORK_TOR.equals(proxy.mode)) {
-            pause(account, isOrbotInstalled() ? "tor_starting" : "orbot_required");
-            startOrbot();
+            int port = AgramTorManager.getInstance().getSocksPort();
+            if (port > 0) {
+                applyTor(account, record, port, resume);
+            } else {
+                // Tor can take time to bootstrap. Pause first so neither MTProto
+                // nor push can escape over the direct connection in that window.
+                pause(account, "tor_starting");
+                ConnectionsManager.native_setProxySettings(account, "", 1080, "", "", "");
+                AgramTorManager.getInstance().ensureStarted();
+            }
             return;
         }
         if (AgramContainerManager.NETWORK_PROXY.equals(proxy.mode)) {
@@ -78,6 +61,7 @@ public final class AgramNetworkController {
             if (resume) {
                 ConnectionsManager.native_resumeNetwork(account, false);
             }
+            AgramTorManager.getInstance().stopIfUnused();
             return;
         }
         ConnectionsManager.native_setProxySettings(account, "", 1080, "", "", "");
@@ -85,31 +69,39 @@ public final class AgramNetworkController {
         if (resume) {
             ConnectionsManager.native_resumeNetwork(account, false);
         }
+        AgramTorManager.getInstance().stopIfUnused();
+    }
+
+    public void onTorStateChanged(String torState, int port) {
+        for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
+            if (!managedAccounts.get(account)) {
+                continue;
+            }
+            AgramContainerManager.ContainerRecord record = AgramContainerManager.getInstance().getContainer(account);
+            if (record == null || !AgramContainerManager.NETWORK_TOR.equals(record.proxyMode)) {
+                continue;
+            }
+            if (AgramTorManager.STATE_READY.equals(torState) && port > 0) {
+                applyTor(account, record, port, true);
+            } else {
+                pause(account, AgramTorManager.STATE_ERROR.equals(torState) ? "tor_error" : "tor_unavailable");
+                ConnectionsManager.native_setProxySettings(account, "", 1080, "", "", "");
+            }
+            AgramPushController.getInstance().onNetworkRouteChanged(account);
+        }
     }
 
     public void onProxyError() {
         for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
+            if (!managedAccounts.get(account)) {
+                continue;
+            }
             AgramContainerManager.ContainerRecord record = AgramContainerManager.getInstance().getContainer(account);
             if (record != null && record.killSwitch
                     && !AgramContainerManager.NETWORK_DIRECT.equals(record.proxyMode)) {
-                pause(account, "proxy_error");
+                pause(account, AgramContainerManager.NETWORK_TOR.equals(record.proxyMode)
+                        ? "tor_error" : "proxy_error");
             }
-        }
-    }
-
-    public boolean isOrbotInstalled() {
-        try {
-            ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ORBOT_PACKAGE, 0);
-            return true;
-        } catch (PackageManager.NameNotFoundException error) {
-            return false;
-        }
-    }
-
-    public void openOrbot(Context context) {
-        Intent intent = context.getPackageManager().getLaunchIntentForPackage(ORBOT_PACKAGE);
-        if (intent != null) {
-            context.startActivity(intent);
         }
     }
 
@@ -118,42 +110,19 @@ public final class AgramNetworkController {
         return value == null ? "not_applied" : value;
     }
 
+    private void applyTor(int account, AgramContainerManager.ContainerRecord record, int port, boolean resume) {
+        String isolationId = TextUtils.isEmpty(record.torIsolationId)
+                ? "agram-account-" + account : record.torIsolationId;
+        ConnectionsManager.native_setProxySettings(
+                account, "127.0.0.1", port, "<torS0X>0", isolationId, "");
+        state.put(account, "tor_active");
+        if (resume) {
+            ConnectionsManager.native_resumeNetwork(account, false);
+        }
+    }
+
     private void pause(int account, String reason) {
         state.put(account, reason);
         ConnectionsManager.native_pauseNetwork(account);
     }
-
-    private void startOrbot() {
-        Intent intent = new Intent(ACTION_START);
-        intent.setPackage(ORBOT_PACKAGE);
-        intent.putExtra(EXTRA_PACKAGE_NAME, ApplicationLoader.applicationContext.getPackageName());
-        ApplicationLoader.applicationContext.sendBroadcast(intent);
-    }
-
-    private final BroadcastReceiver orbotStatusReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if (!ACTION_STATUS.equals(intent.getAction())) {
-                return;
-            }
-            String status = intent.getStringExtra(EXTRA_STATUS);
-            int port = intent.getIntExtra(EXTRA_SOCKS_PORT, 9050);
-            if (port <= 0 || port > 65535) {
-                port = 9050;
-            }
-            for (int account = 0; account < UserConfig.MAX_ACCOUNT_COUNT; account++) {
-                AgramContainerManager.ContainerRecord record = AgramContainerManager.getInstance().getContainer(account);
-                if (record == null || !AgramContainerManager.NETWORK_TOR.equals(record.proxyMode)) {
-                    continue;
-                }
-                if (STATUS_ON.equals(status)) {
-                    ConnectionsManager.native_setProxySettings(account, "127.0.0.1", port, "", "", "");
-                    state.put(account, "tor_active");
-                    ConnectionsManager.native_resumeNetwork(account, false);
-                } else if (record.killSwitch) {
-                    pause(account, "tor_unavailable");
-                }
-            }
-        }
-    };
 }

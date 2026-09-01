@@ -82,7 +82,6 @@
 
     <queries>
         <package android:name="com.google.android.apps.maps"/>
-        <package android:name="org.torproject.android"/>
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="ton"/>

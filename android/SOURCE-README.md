@@ -1,6 +1,6 @@
 # ά‑Gram source overlay
 
-This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.15` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
+This archive contains the files changed for the ά‑Gram `12.10.1-a-gram.16` APK. It intentionally does not contain Telegram API credentials, a private signing keystore, generated build output, Android SDK, NDK or Gradle caches.
 
 ## Base source
 
@@ -49,7 +49,8 @@ The resulting APK is under `TMessagesProj_AppStandalone/build/outputs/apk/afat/s
 - Per-container Ghost Mode has a master switch directly in the dialogs header, uses a highlighted active state, and applies only to the current container. A long press opens the detailed controls for read-receipt, story-view, typing/recording and online-presence suppression; replies/reactions can require confirmation because server-side interactions may still reveal activity.
 - Automatic chat viewing and explicit read actions use separate paths. While read suppression is active, opening or scrolling through a regular chat does not mutate its local unread state, remove its notification, or send a receipt. The chat-list action and notification action “Mark as read” explicitly clear both local state and the server receipt; optional read-on-interaction does the same after a reply or reaction.
 - Story viewing follows the same local-preservation rule: in Ghost Mode an opened story keeps its unread ring and notification. Opening a story and sending any story reaction use explicit confirmation dialogs.
-- Per-container network source of truth and native proxy application: direct, custom SOCKS5/MTProto proxy, or Tor through Orbot. With kill switch enabled, a proxy error or unavailable Tor pauses only that account's native MTProto engine while its local database remains readable.
+- Per-container network source of truth and native proxy application: direct, custom SOCKS5/MTProto proxy, or Tor embedded with Guardian Project `tor-android` 0.4.8.17.2. No Orbot installation is required. One daemon is shared for memory efficiency while each container uses a distinct encrypted SOCKS isolation value; Tor always runs fail-closed and exposes only its dynamically allocated local port.
+- Agram Push follows the selected container route. Its HTTPS stream uses the same dynamic Tor listener and container-specific SOCKS credentials, and reconnects immediately when the Tor state changes rather than falling back to direct networking.
 - Built-in Agram Push transport with no distributor application. Each container owns a random 256-bit endpoint registered with Telegram as Simple Push type 4; `other_uids` remains empty so accounts are not merged into one token. The foreground service shares only Android lifecycle management while every subscription is bound to an immutable container id, account slot and route. Direct MTProto push remains available as an explicit fallback.
 - The default `ntfy.sh` relay sees connection metadata and an opaque Telegram wake value, but never message text, media, auth keys or the account identity stored by Agram. Endpoint URLs are capability secrets, remain encrypted locally and are not printed in the settings preview. Set `AGRAM_PUSH_BASE_URL` to a compatible self-hosted ntfy server when relay ownership or metadata separation is required.
 - Per-container notification privacy: hide identity, show author only, or use full Telegram previews. The secure default is hidden.

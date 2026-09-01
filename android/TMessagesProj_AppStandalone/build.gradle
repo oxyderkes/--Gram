@@ -1,8 +1,21 @@
 apply plugin: 'com.android.application'
 
+// Gradle's in-process javac leaks zipfs handles on Windows and can omit
+// same-module sources after the resulting AccessDeniedException. A short-lived
+// external javac process closes those handles deterministically.
+tasks.withType(JavaCompile).configureEach {
+    if (System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')) {
+        options.incremental = false
+        options.fork = true
+        options.forkOptions.memoryMaximumSize = '6g'
+        options.forkOptions.executable = new File(System.getProperty('java.home'), 'bin/javac.exe').absolutePath
+    }
+}
+
 repositories {
     mavenCentral()
     google()
+    maven { url 'https://raw.githubusercontent.com/guardianproject/gpmaven/master' }
 }
 
 configurations {

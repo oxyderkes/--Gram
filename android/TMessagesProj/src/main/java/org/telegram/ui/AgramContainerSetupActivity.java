@@ -27,6 +27,7 @@ import android.widget.Toast;
 import org.telegram.messenger.AgramContainerManager;
 import org.telegram.messenger.AgramNetworkController;
 import org.telegram.messenger.AgramPushController;
+import org.telegram.messenger.AgramTorManager;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.LocaleController;
@@ -70,6 +71,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
     private EditText proxyPasswordField;
     private EditText proxySecretField;
     private Switch killSwitch;
+    private TextView torStatusAction;
 
     private RadioButton agramPush;
     private RadioButton directPush;
@@ -85,6 +87,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
     private RadioButton hiddenNotifications;
     private RadioButton authorNotifications;
     private RadioButton fullNotifications;
+    private final AgramTorManager.Listener torStateListener = state -> updateTorStatusAction();
 
     public AgramContainerSetupActivity() {
         this(UserConfig.selectedAccount);
@@ -104,7 +107,14 @@ public class AgramContainerSetupActivity extends BaseFragment {
         }
         pendingPresetIndex = record.presetIndex;
         pendingProfileId = TextUtils.isEmpty(record.profileId) ? UUID.randomUUID().toString() : record.profileId;
+        AgramTorManager.getInstance().addListener(torStateListener);
         return super.onFragmentCreate();
+    }
+
+    @Override
+    public void onFragmentDestroy() {
+        AgramTorManager.getInstance().removeListener(torStateListener);
+        super.onFragmentDestroy();
     }
 
     @Override
@@ -229,7 +239,7 @@ public class AgramContainerSetupActivity extends BaseFragment {
         card.addView(sectionLabel(context, "СЕТЬ ЭТОГО КОНТЕЙНЕРА"));
         directNetwork = radio(context, "Прямое соединение", "Без локального proxy/Tor.");
         proxyNetwork = radio(context, "Свой прокси", "SOCKS5 или MTProto, только для этого аккаунта.");
-        torNetwork = radio(context, "Tor через Orbot", "До готовности Orbot сеть контейнера будет заблокирована.");
+        torNetwork = radio(context, "Встроенный Tor", "Работает внутри Agram; Orbot и внешний distributor не нужны.");
         card.addView(directNetwork);
         card.addView(proxyNetwork);
         card.addView(torNetwork);
@@ -255,18 +265,19 @@ public class AgramContainerSetupActivity extends BaseFragment {
 
         killSwitch = settingSwitch(context, "Kill switch: не выходить в сеть без выбранного маршрута", record.killSwitch);
         card.addView(killSwitch);
-        TextView openOrbot = action(context, AgramNetworkController.getInstance().isOrbotInstalled()
-                ? "ОТКРЫТЬ ORBOT / СМЕНИТЬ МОСТ" : "ORBOT НЕ УСТАНОВЛЕН");
-        openOrbot.setOnClickListener(v -> {
-            if (AgramNetworkController.getInstance().isOrbotInstalled()) {
-                AgramNetworkController.getInstance().openOrbot(getParentActivity());
+        torStatusAction = action(context, "ЗАПУСТИТЬ ВСТРОЕННЫЙ TOR");
+        torStatusAction.setOnClickListener(v -> {
+            selectNetworkMode(AgramContainerManager.NETWORK_TOR);
+            if (AgramTorManager.STATE_ERROR.equals(AgramTorManager.getInstance().getState())) {
+                AgramTorManager.getInstance().restart();
             } else {
-                Toast.makeText(getParentActivity(), "Установите Orbot и вернитесь в Agram", Toast.LENGTH_LONG).show();
+                AgramTorManager.getInstance().ensureStarted();
             }
+            updateTorStatusAction();
         });
-        card.addView(openOrbot, LayoutHelper.createLinear(-1, 44, 0, 8, 0, 0));
+        card.addView(torStatusAction, LayoutHelper.createLinear(-1, 44, 0, 8, 0, 0));
         TextView note = text(context,
-                "При ошибке прокси или остановке Orbot kill switch ставит MTProto-сеть только этого контейнера на паузу. Локальная история остаётся доступной.",
+                "Один встроенный Tor-процесс экономит память, а отдельный SOCKS-auth token из зашифрованной карточки контейнера разделяет его circuit-группу. Tor всегда fail-closed: до готовности маршрута MTProto этого контейнера стоит на паузе, локальная история остаётся доступной.",
                 12, Theme.key_windowBackgroundWhiteGrayText, false);
         note.setLineSpacing(AndroidUtilities.dp(2), 1f);
         card.addView(note, LayoutHelper.createLinear(-1, -2, 0, 8, 0, 0));
@@ -353,10 +364,6 @@ public class AgramContainerSetupActivity extends BaseFragment {
         if (AgramContainerManager.NETWORK_PROXY.equals(networkMode)
                 && (TextUtils.isEmpty(proxyAddressField.getText().toString().trim()) || proxyPort == 0)) {
             toast("Укажите корректные адрес и порт прокси"); return;
-        }
-        if (AgramContainerManager.NETWORK_TOR.equals(networkMode)
-                && !AgramNetworkController.getInstance().isOrbotInstalled()) {
-            toast("Для Tor установите Orbot или выберите другой маршрут"); return;
         }
         String pushMode = selectedPushMode();
 
@@ -513,7 +520,27 @@ public class AgramContainerSetupActivity extends BaseFragment {
         killSwitch.setAlpha(killSwitch.isEnabled() ? 1f : .5f);
         if (!proxy && !tor) killSwitch.setChecked(false);
         else if (tor) killSwitch.setChecked(true);
+        if (torStatusAction != null) {
+            torStatusAction.setVisibility(tor ? View.VISIBLE : View.GONE);
+            updateTorStatusAction();
+        }
         updatePreview();
+    }
+
+    private void updateTorStatusAction() {
+        if (torStatusAction == null) {
+            return;
+        }
+        String torState = AgramTorManager.getInstance().getState();
+        if (AgramTorManager.STATE_READY.equals(torState)) {
+            torStatusAction.setText("TOR ПОДКЛЮЧЁН · CIRCUIT ИЗОЛИРОВАН");
+        } else if (AgramTorManager.STATE_STARTING.equals(torState)) {
+            torStatusAction.setText("TOR ЗАПУСКАЕТСЯ · СЕТЬ ЗАБЛОКИРОВАНА");
+        } else if (AgramTorManager.STATE_ERROR.equals(torState)) {
+            torStatusAction.setText("ОШИБКА TOR · НАЖМИТЕ, ЧТОБЫ ПОВТОРИТЬ");
+        } else {
+            torStatusAction.setText("ЗАПУСТИТЬ ВСТРОЕННЫЙ TOR");
+        }
     }
 
     private void selectPushMode(String mode) {
