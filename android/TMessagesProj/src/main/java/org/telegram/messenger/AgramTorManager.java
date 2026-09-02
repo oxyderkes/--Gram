@@ -329,12 +329,12 @@ public final class AgramTorManager {
                 .append("ClientOnly 1\n")
                 .append("AvoidDiskWrites 1\n")
                 .append("SafeLogging 1\n")
-                .append("SocksPort 0\n")
-                // Tor accepts either [address:]port or the standalone value
-                // "auto".  "127.0.0.1:auto" fails --verify-config before
-                // bootstrap starts. Auto listeners are loopback-only by
-                // default and TorService discovers the selected port through
-                // GETINFO net/listeners/socks.
+                // TorService already writes a non-zero SocksPort to its
+                // defaults torrc. Never combine it with "SocksPort 0": Tor
+                // rejects a zero and non-zero SocksPort in one effective
+                // configuration before bootstrap begins. Multiple non-zero
+                // listeners are valid, and TorService discovers the selected
+                // port through GETINFO net/listeners/socks.
                 .append("SocksPort auto IsolateSOCKSAuth\n");
 
         stopTransports();
