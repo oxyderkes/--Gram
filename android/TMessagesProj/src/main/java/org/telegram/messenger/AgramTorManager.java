@@ -410,16 +410,18 @@ public final class AgramTorManager {
     private void startTransport(String transport, String torName, StringBuilder torrc) throws Exception {
         transportController.start(transport, "");
         long port = transportController.port(transport);
-        String address = transportController.localAddress(transport);
+        String endpoint = transportController.localAddress(transport);
         if (port <= 0 || port > 65535) {
             throw new IllegalStateException("Transport " + torName + " did not allocate a port");
         }
-        if (TextUtils.isEmpty(address)) {
-            address = "127.0.0.1";
+        // IPtProxy localAddress() already returns host and port. Appending port again
+        // produces an invalid endpoint such as 127.0.0.1:12345:12345.
+        if (TextUtils.isEmpty(endpoint)) {
+            endpoint = "127.0.0.1:" + port;
         }
         activeTransports.add(transport);
         torrc.append("ClientTransportPlugin ").append(torName)
-                .append(" socks5 ").append(address).append(':').append(port).append('\n');
+                .append(" socks5 ").append(endpoint).append('\n');
     }
 
     private synchronized void scheduleBootstrapPoll(int generation, long delay) {

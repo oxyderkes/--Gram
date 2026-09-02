@@ -80,6 +80,12 @@ if "SocksPort 127.0.0.1:auto" in tor_manager:
     errors.append("invalid address:auto SocksPort syntax returned")
 if 'SocksPort auto IsolateSOCKSAuth' not in tor_manager:
     errors.append("embedded Tor must request an automatic isolated SOCKS listener")
+if "transportController.localAddress(transport)" not in tor_manager:
+    errors.append("pluggable transport endpoint discovery is missing")
+if ".append(endpoint).append(':').append(port)" in tor_manager or ".append(address).append(':').append(port)" in tor_manager:
+    errors.append("IPtProxy localAddress already includes its port and must not be suffixed again")
+if '.append(" socks5 ").append(endpoint).append(\'\\n\')' not in tor_manager:
+    errors.append("pluggable transport endpoint must be written as the complete IPtProxy host:port value")
 
 if "ensureUniquePushInstanceLocked" not in container_manager:
     errors.append("legacy duplicate push instances are not repaired")
