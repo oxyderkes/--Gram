@@ -76,6 +76,11 @@ for source, guard in required_tor_guards:
     if guard not in source:
         errors.append(f"embedded Tor/session-route guard is missing: {guard}")
 
+if "SocksPort 127.0.0.1:auto" in tor_manager:
+    errors.append("invalid address:auto SocksPort syntax returned")
+if 'SocksPort auto IsolateSOCKSAuth' not in tor_manager:
+    errors.append("embedded Tor must request an automatic isolated SOCKS listener")
+
 if "ensureUniquePushInstanceLocked" not in container_manager:
     errors.append("legacy duplicate push instances are not repaired")
 if "PUSH_INSTANCE_HASH_PREFIX" not in container_manager or "readPushInstance" in container_manager:

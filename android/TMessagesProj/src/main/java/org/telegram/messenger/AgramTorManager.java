@@ -330,7 +330,12 @@ public final class AgramTorManager {
                 .append("AvoidDiskWrites 1\n")
                 .append("SafeLogging 1\n")
                 .append("SocksPort 0\n")
-                .append("SocksPort 127.0.0.1:auto IsolateSOCKSAuth\n");
+                // Tor accepts either [address:]port or the standalone value
+                // "auto".  "127.0.0.1:auto" fails --verify-config before
+                // bootstrap starts. Auto listeners are loopback-only by
+                // default and TorService discovers the selected port through
+                // GETINFO net/listeners/socks.
+                .append("SocksPort auto IsolateSOCKSAuth\n");
 
         stopTransports();
         if (!bridgeLines.isEmpty()) {

@@ -502,6 +502,18 @@ public class AgramContainerSetupActivity extends BaseFragment {
 
     private void selectProfileMode(int mode) {
         boolean custom = mode == AgramContainerManager.PROFILE_CUSTOM;
+        if (!custom) {
+            View focused = fragmentView == null ? null : fragmentView.findFocus();
+            if (focused != null) {
+                AndroidUtilities.hideKeyboard(focused);
+            }
+            if (deviceModelField != null) {
+                deviceModelField.clearFocus();
+            }
+            if (systemVersionField != null) {
+                systemVersionField.clearFocus();
+            }
+        }
         customProfile.setChecked(custom);
         presetProfile.setChecked(!custom);
         customProfileFields.setVisibility(custom ? View.VISIBLE : View.GONE);
